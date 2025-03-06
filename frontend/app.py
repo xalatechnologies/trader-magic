@@ -66,6 +66,13 @@ def get_json_data(key):
 redis_client.get_json = get_json_data
 redis_client.scan_iter = scan_keys
 
+# Add pubsub method to redis_client
+def get_pubsub():
+    """Get a pubsub object from Redis"""
+    return redis_client.pubsub()
+
+redis_client.get_pubsub = get_pubsub
+
 # Frontend configuration
 frontend_host = os.getenv('FRONTEND_HOST', '0.0.0.0')
 frontend_port = int(os.getenv('FRONTEND_PORT', 9753))

@@ -860,7 +860,7 @@ function initTradeSettings() {
                     this.disabled = false;
                     this.innerHTML = '<i class="fas fa-save"></i> Save';
                     
-                    if (data.success) {
+                    if (data.status === 'success') {
                         // Show success message
                         const originalText = this.innerHTML;
                         this.innerHTML = '<i class="fas fa-check"></i> Saved';

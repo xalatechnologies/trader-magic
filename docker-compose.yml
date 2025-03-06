@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: python-trader/data-retrieval
+    image: trader-magic/data-retrieval
     container_name: data_retrieval
     volumes:
       - ./:/app
@@ -28,7 +28,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: python-trader/ai-decision
+    image: trader-magic/ai-decision
     container_name: ai_decision
     volumes:
       - ./:/app
@@ -55,7 +55,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: python-trader/trade-execution
+    image: trader-magic/trade-execution
     container_name: trade_execution
     volumes:
       - ./:/app
