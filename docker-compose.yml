@@ -1,0 +1,168 @@
+services:
+  data_retrieval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: python-trader/data-retrieval
+    container_name: data_retrieval
+    volumes:
+      - ./:/app
+    command: python -m src.data_retrieval.service
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=data_retrieval
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+    networks:
+      - trader_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ai_decision:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: python-trader/ai-decision
+    container_name: ai_decision
+    volumes:
+      - ./:/app
+    command: python -m src.ai_decision.service
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=ai_decision
+      - PYTHONPATH=/app
+    depends_on:
+      - ollama
+      - ollama_init
+      - redis
+    networks:
+      - trader_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  trade_execution:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: python-trader/trade-execution
+    container_name: trade_execution
+    volumes:
+      - ./:/app
+    command: python -m src.trade_execution.service
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=trade_execution
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+    networks:
+      - trader_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: python-trader/frontend
+    container_name: frontend
+    ports:
+      - "${FRONTEND_PORT:-9753}:${FRONTEND_PORT:-9753}"
+    volumes:
+      - ./frontend:/app/frontend
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    environment:
+      - SERVICE_NAME=frontend
+      - PYTHONPATH=/app
+    # Use explicit command to run the app
+    command: python /app/frontend/app.py
+    depends_on:
+      - redis
+    networks:
+      - trader_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - trader_network
+    restart: unless-stopped
+    # Simpler healthcheck with curl preinstalled in the container
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        
+  ollama_init:
+    image: curlimages/curl:latest
+    container_name: ollama_init
+    volumes:
+      - ./scripts:/scripts
+    command: sh /scripts/init-ollama.sh
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:latest}
+    depends_on:
+      - ollama
+    networks:
+      - trader_network
+    restart: "no"
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --notify-keyspace-events KEA
+    networks:
+      - trader_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  trader_network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  redis_data:

@@ -1,0 +1,6 @@
+flask==2.3.3
+python-dotenv==1.0.0
+redis==5.0.1
+pydantic>=1.9.0,<2.0.0  # Use a version compatible with alpaca-py
+loguru==0.7.2
+flask-socketio==5.3.6

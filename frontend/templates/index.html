@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraderMagic Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    {% if debug_mode %}
+    <div class="simulation-banner">
+        <i class="fas fa-exclamation-triangle"></i> DEBUG MODE - All trades are simulated locally with NO API CALLS (even in paper trading mode)
+    </div>
+    {% endif %}
+    
+    <header {% if debug_mode %}style="margin-top: 30px;"{% endif %}>
+        <div class="header-container">
+            <div class="logo">
+                <i class="fas fa-hat-wizard"></i>
+                <h1>TraderMagic</h1>
+            </div>
+            <div class="status-indicators">
+                <div class="status-indicator">
+                    <span id="connection-status">
+                        <i class="fas fa-circle-notch fa-spin"></i> Connecting...
+                    </span>
+                </div>
+                <div class="status-indicator" id="ollama-status-container" style="display: none;">
+                    <span id="ollama-status">
+                        <i class="fas fa-brain"></i> <span id="ollama-status-text">Loading...</span>
+                    </span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div class="theme-selector">
+                    <button id="theme-toggle" class="theme-button">
+                        <i class="fas fa-sun" id="theme-icon"></i>
+                        <span id="theme-text">Auto</span>
+                    </button>
+                    <div class="theme-options" id="theme-options">
+                        <div class="theme-option" data-theme="auto">
+                            <i class="fas fa-adjust"></i> Auto
+                        </div>
+                        <div class="theme-option" data-theme="light">
+                            <i class="fas fa-sun"></i> Light
+                        </div>
+                        <div class="theme-option" data-theme="dark">
+                            <i class="fas fa-moon"></i> Dark
+                        </div>
+                    </div>
+                </div>
+                <button id="docs-btn" class="btn">
+                    <i class="fas fa-question-circle"></i> Help
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="dashboard-container">
+            <div class="dashboard-header">
+                <h2>Trading Dashboard</h2>
+                <div class="controls">
+                    <div class="trading-toggle-container">
+                        <button id="trading-toggle-btn" class="btn btn-large {% if trading_enabled %}btn-danger{% else %}btn-success{% endif %}">
+                            <i class="fas {% if trading_enabled %}fa-stop-circle{% else %}fa-play-circle{% endif %}"></i> 
+                            {% if trading_enabled %}Stop Trading{% else %}Start Trading{% endif %}
+                        </button>
+                    </div>
+                    
+                    <div class="trade-mode-controls">
+                        <label for="trade-mode-select">Trade Mode:</label>
+                        <select id="trade-mode-select" class="trading-select">
+                            <option value="percentage" {% if not fixed_amount_mode %}selected{% endif %}>Portfolio Percentage</option>
+                            <option value="fixed" {% if fixed_amount_mode %}selected{% endif %}>Fixed Amount</option>
+                        </select>
+                        
+                        <div id="percentage-controls" class="trade-amount-controls" {% if fixed_amount_mode %}style="display:none"{% endif %}>
+                            <label for="trade-percentage">Percentage:</label>
+                            <input type="number" id="trade-percentage" min="0.1" max="100" step="0.1" value="{{ trade_percentage }}" class="trade-input">
+                            <span>%</span>
+                        </div>
+                        
+                        <div id="fixed-amount-controls" class="trade-amount-controls" {% if not fixed_amount_mode %}style="display:none"{% endif %}>
+                            <label for="fixed-amount">Amount:</label>
+                            <span>$</span>
+                            <input type="number" id="fixed-amount" min="1" step="0.01" value="{{ fixed_amount }}" class="trade-input">
+                        </div>
+                        
+                        <button id="save-trade-settings" class="btn">
+                            <i class="fas fa-save"></i> Save
+                        </button>
+                    </div>
+                    
+                    <button id="refresh-btn" class="btn">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            
+            <div class="symbols-container">
+                {% for symbol in symbols %}
+                <div class="symbol-card" id="card-{{ symbol|replace('/', '-') }}">
+                    <div class="symbol-header">
+                        <h3>{{ symbol }}</h3>
+                        <span class="last-updated" id="updated-{{ symbol|replace('/', '-') }}">Waiting for data...</span>
+                    </div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-title">RSI Value</div>
+                            <div class="metric-value" id="rsi-{{ symbol|replace('/', '-') }}">--</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-title">Decision</div>
+                            <div class="metric-value decision" id="decision-{{ symbol|replace('/', '-') }}">--</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-title">Status</div>
+                            <div class="metric-value" id="status-{{ symbol|replace('/', '-') }}">--</div>
+                        </div>
+                    </div>
+                    <div class="price-chart-container">
+                        <!-- Enforce unique ID and fixed dimensions for canvas -->
+                        <canvas 
+                            id="price-chart-{{ symbol|replace('/', '-') }}" 
+                            class="price-chart"
+                            width="300"
+                            height="120"
+                        ></canvas>
+                    </div>
+                    <div class="trade-info" id="trade-info-{{ symbol|replace('/', '-') }}">
+                        <div class="trade-details">No recent trades</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <div class="history-section">
+                <h3>Recent Activity</h3>
+                <div class="activity-log" id="activity-log">
+                    <div class="empty-log">No recent activity</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="footer-container">
+            <p>&copy; 2025 TraderMagic by Tim Green - Local AI Trading System. Inspired by the work of Mike Russell and the Creator Magic Community.</p>
+            <div class="footer-links">
+                <a href="https://github.com/rawveg/trader-magic" target="_blank" class="footer-link">
+                    <i class="fab fa-github"></i> GitHub
+                </a>
+                <a href="https://www.linkedin.com/in/rawveg" target="_blank" class="footer-link">
+                    <i class="fab fa-linkedin"></i> LinkedIn
+                </a>
+                <a href="https://opensource.org/licenses/MIT" target="_blank" class="footer-link">
+                    <i class="fas fa-balance-scale"></i> MIT License
+                </a>
+                <a href="http://www.creatormagic.ai" target="_blank" class="footer-link">
+                    <i class="fas fa-star"></i> Creator Magic
+                </a>
+            </div>
+            <div class="system-info">
+                {% if debug_mode %}
+                <span class="badge badge-purple">Debug Mode (No API Calls)</span>
+                {% endif %}
+                
+                {% if paper_trading %}
+                <span class="badge badge-blue">Paper Trading</span>
+                {% else %}
+                <span class="badge badge-red">Live Trading</span>
+                {% endif %}
+                
+                {% if trading_enabled %}
+                <span class="badge badge-green">Trading Enabled</span>
+                {% else %}
+                <span class="badge badge-gray">Trading Disabled</span>
+                {% endif %}
+                
+                {% if enforce_pdt and not paper_trading %}
+                <span class="badge badge-yellow">PDT Rules Enforced (stocks only)</span>
+                {% else %}
+                <span class="badge badge-gray">PDT Rules Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Global flag to ensure Chart.js is loaded before initialization
+        window.chartJsLoaded = false;
+        window.addEventListener('load', function() {
+            window.chartJsLoaded = true;
+            console.log("Chart.js confirmed loaded");
+        });
+    </script>
+    
+    <!-- Documentation Modal -->
+    <div id="help-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>TraderMagic Documentation</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>Overview</h3>
+                <p>TraderMagic is an AI-powered automated trading system that uses RSI technical indicators to make trading decisions. The system consists of four main components:</p>
+                <ul>
+                    <li><strong>Data Retrieval Service:</strong> Fetches RSI data from TAAPI.io</li>
+                    <li><strong>AI Decision Engine:</strong> Uses Ollama LLM to analyze RSI data and decide whether to buy, sell, or hold</li>
+                    <li><strong>Trade Execution Service:</strong> Connects to Alpaca for executing trades based on AI decisions</li>
+                    <li><strong>Web Dashboard:</strong> This interface for monitoring trading activity in real-time</li>
+                </ul>
+                
+                <h3>Required Accounts</h3>
+                <p>To use TraderMagic, you'll need accounts with these services:</p>
+                <div class="service-accounts">
+                    <div class="service-account">
+                        <h4><a href="https://taapi.io" target="_blank" rel="noopener">TAAPI.io <i class="fas fa-external-link-alt"></i></a></h4>
+                        <p>Provides technical analysis data (RSI values). Their free tier allows limited usage, but paid tiers offer more frequent updates and additional symbols.</p>
+                        <a href="https://taapi.io/signup" target="_blank" rel="noopener" class="account-link">Sign up for TAAPI</a>
+                    </div>
+                    <div class="service-account">
+                        <h4><a href="https://alpaca.markets" target="_blank" rel="noopener">Alpaca <i class="fas fa-external-link-alt"></i></a></h4>
+                        <p>Executes trades based on system signals. Offers paper trading (simulated) for testing without using real money.</p>
+                        <a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener" class="account-link">Sign up for Alpaca</a>
+                    </div>
+                </div>
+                <p class="note"><strong>Note:</strong> After creating accounts, you'll need to add your API keys to the <code>.env</code> file to connect the system to these services.</p>
+
+                <h3>Dashboard Updates</h3>
+                <p>This dashboard updates in two ways:</p>
+                <ul>
+                    <li><strong>Automatic updates:</strong> The dashboard refreshes every 15 seconds</li>
+                    <li><strong>Manual refresh:</strong> Use the "Refresh" button for immediate updates</li>
+                </ul>
+                <p>Both update methods only retrieve data from Redis cache, not directly from external APIs. This ensures no additional load on rate-limited services.</p>
+
+                <h3>TAAPI.io Rate Limits</h3>
+                <p>The system is designed to respect TAAPI.io's rate limits based on your subscription tier:</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tier</th>
+                            <th>Rate Limit</th>
+                            <th>Recommended Poll Interval</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Free</td>
+                            <td>1 request / 15 seconds</td>
+                            <td>300 seconds (5 minutes)</td>
+                        </tr>
+                        <tr>
+                            <td>Basic</td>
+                            <td>5 requests / 15 seconds</td>
+                            <td>60 seconds (1 minute)</td>
+                        </tr>
+                        <tr>
+                            <td>Pro</td>
+                            <td>30 requests / 15 seconds</td>
+                            <td>10 seconds</td>
+                        </tr>
+                        <tr>
+                            <td>Expert</td>
+                            <td>75 requests / 15 seconds</td>
+                            <td>5 seconds</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>During initial startup, you may see 429 rate limit errors in the logs - this is expected while the services initialize and space out their requests.</p>
+
+                <h3>Trading Information</h3>
+                <p>The system trades a small percentage of your portfolio (default: 2%) and includes safeguards:</p>
+                <ul>
+                    <li>Balance checking ensures trades are only executed when sufficient funds are available</li>
+                    <li>Minimum order size enforcement prevents very small trades</li>
+                    <li>Paper trading mode is enabled for safe testing (indicated by the blue "Paper Trading" badge)</li>
+                </ul>
+                
+                <h3>Symbol Formats</h3>
+                <p>The system supports two types of symbols:</p>
+                <ul>
+                    <li><strong>Cryptocurrencies:</strong> Use format like "BTC/USDT", "ETH/USDT", etc.</li>
+                    <li><strong>Stocks:</strong> Use simple ticker symbols like "AAPL", "TSLA", etc. - these will automatically be converted to the right format</li>
+                </ul>
+                <p class="note"><strong>Note:</strong> Free TAAPI accounts are limited to specific symbols only. If you're using the free tier, you may need to upgrade for full symbol support.</p>
+
+                <h3>Troubleshooting</h3>
+                <p>If you encounter issues:</p>
+                <ol>
+                    <li>Check Docker logs: <code class="code-command">docker compose logs -f</code></li>
+                    <li>Ensure your API keys are correctly configured in the .env file</li>
+                    <li>Verify that all services are running: <code class="code-command">docker compose ps</code></li>
+                    <li>Restart the system using the restart script: <code class="code-command">./restart.sh</code></li>
+                </ol>
+                <p>For more detailed information, refer to the README.md file in the project repository.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
