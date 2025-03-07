@@ -117,8 +117,16 @@ def get_all_trading_data():
                 'result': None,
                 'timestamp': None,
                 'price': None,
-                'price_history': None
+                'price_history': None,
+                'alpaca_valid': True  # Default to True, will be set to False if invalid
             }
+            
+            # Simple check for known unsupported symbols
+            # This is a simplified approach since we can't import the Alpaca client directly
+            if symbol == 'QTUM/USDT':
+                # QTUM/USDT is not supported by Alpaca
+                symbol_data['alpaca_valid'] = False
+                print(f"Symbol {symbol} is not valid for Alpaca")
             
             # Use get_json for all Redis data to match data_retrieval.service
             

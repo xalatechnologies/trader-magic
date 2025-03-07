@@ -480,6 +480,51 @@ function updateSymbolCard(symbol, data) {
     const statusElement = document.getElementById(`status-${symbolKey}`);
     const updatedElement = document.getElementById(`updated-${symbolKey}`);
     const tradeInfoElement = document.getElementById(`trade-info-${symbolKey}`);
+    const chartContainer = document.getElementById(`chart-container-${symbolKey}`);
+    
+    // Check if this symbol is valid for Alpaca
+    const isAlpacaInvalidSymbol = data.alpaca_valid === false;
+    
+    // If the symbol is invalid for Alpaca, update the UI accordingly
+    if (isAlpacaInvalidSymbol) {
+        // Add a red border to the card
+        card.classList.add('alpaca-invalid-symbol');
+        
+        // Clear RSI, decision, and status values
+        rsiElement.textContent = '--';
+        decisionElement.textContent = '--';
+        decisionElement.className = 'metric-value decision';
+        statusElement.textContent = '--';
+        
+        // Disable the chart container
+        if (chartContainer) {
+            chartContainer.classList.add('disabled-chart');
+        }
+        
+        // Display a message about Alpaca not supporting this symbol
+        tradeInfoElement.innerHTML = `
+            <div class="trade-details trade-failed">
+                <strong>Symbol not supported:</strong> Alpaca does not support ${symbol}
+            </div>
+        `;
+        
+        // Update the timestamp if available
+        if (data.timestamp) {
+            updatedElement.textContent = `Updated ${getTimeAgo(data.timestamp)}`;
+        } else {
+            updatedElement.textContent = 'No data';
+        }
+        
+        return; // Exit early to avoid further processing
+    } else {
+        // Remove the invalid class if it was previously added
+        card.classList.remove('alpaca-invalid-symbol');
+        
+        // Enable the chart container
+        if (chartContainer) {
+            chartContainer.classList.remove('disabled-chart');
+        }
+    }
     
     // Update RSI value
     if (data.rsi && data.rsi.value !== undefined) {
@@ -511,8 +556,10 @@ function updateSymbolCard(symbol, data) {
         updatedElement.textContent = 'No data';
     }
     
-    // Update price chart
-    updatePriceChart(symbolKey, data);
+    // Update price chart (only if the symbol is valid for Alpaca)
+    if (!isAlpacaInvalidSymbol) {
+        updatePriceChart(symbolKey, data);
+    }
     
     // Get info about order status
     const isExecutedTrade = data.result && data.result.status === 'executed';
