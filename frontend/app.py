@@ -750,6 +750,10 @@ def update_trading_settings():
             update_env_file('TRADE_USE_FIXED', 'true')
             update_env_file('TRADE_FIXED_AMOUNT', str(amount))
             
+            # Also update environment variables in memory
+            os.environ['TRADE_USE_FIXED'] = 'true'
+            os.environ['TRADE_FIXED_AMOUNT'] = str(amount)
+            
             # Publish update event to Redis
             try:
                 redis_client.publish('settings:update', json.dumps({
@@ -774,6 +778,10 @@ def update_trading_settings():
             # Update .env file
             update_env_file('TRADE_USE_FIXED', 'false')
             update_env_file('TRADE_PERCENTAGE', str(percentage))
+            
+            # Also update environment variables in memory
+            os.environ['TRADE_USE_FIXED'] = 'false'
+            os.environ['TRADE_PERCENTAGE'] = str(percentage)
             
             # Publish update event to Redis
             try:
@@ -1001,6 +1009,13 @@ def handle_connect(sid=None):
     """Handle client connection"""
     # Send initial data to the client
     socketio.emit('data_update', get_all_trading_data())
+
+if __name__ == '__main__':
+    # Start Redis listener in a background thread
+    threading.Thread(target=redis_listener, daemon=True).start()
+    
+    # Start Flask app
+    socketio.run(app, host=frontend_host, port=frontend_port, debug=False, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
     # Start Redis listener in a background thread

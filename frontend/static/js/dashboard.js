@@ -143,6 +143,90 @@ document.addEventListener("DOMContentLoaded", function() {
     }
     
     // Initialize trade settings
+    // Define the initTradeSettings function inside the DOMContentLoaded scope
+    function initTradeSettings() {
+        console.log('Initializing trade settings');
+        if (tradeModeSelect) {
+            console.log('Trade mode select found:', tradeModeSelect);
+            tradeModeSelect.addEventListener('change', function() {
+                const mode = this.value;
+                
+                if (mode === 'percentage') {
+                    percentageControls.style.display = 'flex';
+                    fixedAmountControls.style.display = 'none';
+                } else if (mode === 'fixed') {
+                    percentageControls.style.display = 'none';
+                    fixedAmountControls.style.display = 'flex';
+                }
+            });
+        }
+        
+        if (saveTradeSettingsBtn) {
+            console.log('Save button found:', saveTradeSettingsBtn);
+            saveTradeSettingsBtn.addEventListener('click', function() {
+                console.log('Save button clicked');
+                const mode = tradeModeSelect.value;
+                const settings = {
+                    mode: mode
+                };
+                
+                if (mode === 'percentage') {
+                    settings.percentage = parseFloat(tradePercentageInput.value);
+                } else if (mode === 'fixed') {
+                    settings.fixed_amount = parseFloat(fixedAmountInput.value);
+                }
+                
+                // Validate input
+                let valid = true;
+                if (mode === 'percentage' && (isNaN(settings.percentage) || settings.percentage <= 0 || settings.percentage > 100)) {
+                    alert('Percentage must be between 0.1 and 100');
+                    valid = false;
+                } else if (mode === 'fixed' && (isNaN(settings.fixed_amount) || settings.fixed_amount < 1)) {
+                    alert('Fixed amount must be at least $1');
+                    valid = false;
+                }
+                
+                if (valid) {
+                    // Disable button during API call
+                    this.disabled = true;
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+                    
+                    // Send API request
+                    fetch('/api/trading-settings', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(settings)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-save"></i> Save';
+                        
+                        if (data.status === 'success') {
+                            // Show success message
+                            const originalText = this.innerHTML;
+                            this.innerHTML = '<i class="fas fa-check"></i> Saved';
+                            setTimeout(() => {
+                                this.innerHTML = originalText;
+                            }, 2000);
+                        } else {
+                            alert('Error saving settings: ' + (data.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error saving settings:', error);
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-save"></i> Save';
+                        alert('Error saving settings. Please try again.');
+                    });
+                }
+            });
+        }
+    }
+    
+    // Call the function
     initTradeSettings();
 });
 
@@ -803,84 +887,7 @@ function setTheme(theme) {
     }
 }
 
-// Handle trade mode settings
-function initTradeSettings() {
-    if (tradeModeSelect) {
-        tradeModeSelect.addEventListener('change', function() {
-            const mode = this.value;
-            
-            if (mode === 'percentage') {
-                percentageControls.style.display = 'flex';
-                fixedAmountControls.style.display = 'none';
-            } else if (mode === 'fixed') {
-                percentageControls.style.display = 'none';
-                fixedAmountControls.style.display = 'flex';
-            }
-        });
-    }
-    
-    if (saveTradeSettingsBtn) {
-        saveTradeSettingsBtn.addEventListener('click', function() {
-            const mode = tradeModeSelect.value;
-            const settings = {
-                mode: mode
-            };
-            
-            if (mode === 'percentage') {
-                settings.percentage = parseFloat(tradePercentageInput.value);
-            } else if (mode === 'fixed') {
-                settings.fixed_amount = parseFloat(fixedAmountInput.value);
-            }
-            
-            // Validate input
-            let valid = true;
-            if (mode === 'percentage' && (isNaN(settings.percentage) || settings.percentage <= 0 || settings.percentage > 100)) {
-                alert('Percentage must be between 0.1 and 100');
-                valid = false;
-            } else if (mode === 'fixed' && (isNaN(settings.fixed_amount) || settings.fixed_amount < 1)) {
-                alert('Fixed amount must be at least $1');
-                valid = false;
-            }
-            
-            if (valid) {
-                // Disable button during API call
-                this.disabled = true;
-                this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-                
-                // Send API request
-                fetch('/api/trading-settings', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(settings)
-                })
-                .then(response => response.json())
-                .then(data => {
-                    this.disabled = false;
-                    this.innerHTML = '<i class="fas fa-save"></i> Save';
-                    
-                    if (data.status === 'success') {
-                        // Show success message
-                        const originalText = this.innerHTML;
-                        this.innerHTML = '<i class="fas fa-check"></i> Saved';
-                        setTimeout(() => {
-                            this.innerHTML = originalText;
-                        }, 2000);
-                    } else {
-                        alert('Error saving settings: ' + (data.error || 'Unknown error'));
-                    }
-                })
-                .catch(error => {
-                    console.error('Error saving settings:', error);
-                    this.disabled = false;
-                    this.innerHTML = '<i class="fas fa-save"></i> Save';
-                    alert('Error saving settings. Please try again.');
-                });
-            }
-        });
-    }
-}
+// Note: initTradeSettings function has been moved inside the DOMContentLoaded event handler
 
 // Update all UI components that show trading status
 function updateAllTradingUIComponents(enabled) {
