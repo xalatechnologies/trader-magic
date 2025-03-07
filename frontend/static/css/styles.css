@@ -251,6 +251,180 @@ main {
     margin-bottom: 1.5rem;
 }
 
+/* Account Summary Styles */
+.account-summary-container {
+    background-color: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    box-shadow: var(--shadow);
+    margin-bottom: 1.5rem;
+}
+
+.account-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.account-summary-header h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.account-type-badge {
+    background-color: var(--primary);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.account-type-badge.paper {
+    background-color: var(--primary);
+}
+
+.account-type-badge.live {
+    background-color: var(--danger);
+}
+
+.account-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+}
+
+.account-metric {
+    flex: 1;
+    min-width: 150px;
+    background-color: var(--background);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+}
+
+/* Color coding for positive and negative values in account metrics */
+.account-metric .metric-value.positive {
+    color: var(--success);
+}
+
+.account-metric .metric-value.negative {
+    color: var(--danger);
+}
+
+.positions-summary {
+    background-color: var(--background);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+}
+
+.positions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+.positions-table-container {
+    overflow-x: auto;
+}
+
+.positions-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.positions-table th,
+.positions-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: right;
+}
+
+.positions-table th:first-child,
+.positions-table td:first-child {
+    text-align: left;
+}
+
+.positions-table th {
+    font-weight: 500;
+    color: var(--text-light);
+}
+
+.positions-table tr:nth-child(even) {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="dark"] .positions-table tr:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.positions-table .positive {
+    color: var(--success);
+}
+
+.positions-table .negative {
+    color: var(--danger);
+}
+
+.no-positions {
+    text-align: center !important;
+    color: var(--text-light);
+    padding: 1rem !important;
+}
+
+/* Position Info in Symbol Cards */
+.position-info {
+    margin-top: 0;
+    margin-bottom: 0;
+    padding: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.03);
+    border-radius: 0 0 var(--radius) var(--radius);
+    display: block !important; /* Force display */
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="dark"] .position-info {
+    background-color: rgba(255, 255, 255, 0.03);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Remove the header styles since we're not using it anymore */
+
+.position-metrics-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem; /* Reduce gap between rows */
+}
+
+.position-metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.position-metric-row .metric-title {
+    font-size: 0.75rem; /* Slightly smaller font */
+    color: var(--text-light);
+}
+
+.position-metric-row .metric-value {
+    font-size: 0.85rem; /* Slightly smaller font */
+    font-weight: 500;
+}
+
+.position-metric-row .metric-value.positive {
+    color: var(--success);
+}
+
+.position-metric-row .metric-value.negative {
+    color: var(--danger);
+}
+
+/* Symbol Card Styles */
 .symbol-card {
     background-color: var(--card-bg);
     border-radius: var(--radius);
@@ -744,9 +918,14 @@ footer {
     background-color: rgba(203, 213, 225, 0.1);
 }
 
-/* Ensure the Dark theme option is visible in light mode */
+/* Ensure the Dark theme option is visible in both light and dark modes */
 .theme-option[data-theme="dark"] {
     color: #1e293b;
+}
+
+/* Make dark theme option text visible in dark mode */
+[data-theme="dark"] .theme-option[data-theme="dark"] {
+    color: #ffffff;
 }
 
 .theme-option.active {

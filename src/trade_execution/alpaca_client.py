@@ -720,5 +720,71 @@ class AlpacaClient:
                 error=str(e)
             )
 
+    def get_account_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of the Alpaca account information
+        
+        Returns:
+            Dictionary with account information
+        """
+        try:
+            # Refresh account info
+            self.account = self.client.get_account()
+            
+            # Get all positions
+            positions = self.client.get_all_positions()
+            
+            # Calculate total position value
+            position_value = sum(float(position.market_value) for position in positions)
+            
+            # Create a summary of positions
+            position_summary = []
+            for position in positions:
+                position_summary.append({
+                    "symbol": position.symbol,
+                    "quantity": float(position.qty),
+                    "market_value": float(position.market_value),
+                    "cost_basis": float(position.cost_basis),
+                    "unrealized_pl": float(position.unrealized_pl),
+                    "unrealized_plpc": float(position.unrealized_plpc),
+                    "current_price": float(position.current_price)
+                })
+            
+            # Create the account summary
+            # Calculate daily change (equity - last_equity)
+            daily_change = float(self.account.equity) - float(self.account.last_equity)
+            daily_change_percent = (daily_change / float(self.account.last_equity)) * 100 if float(self.account.last_equity) > 0 else 0
+            
+            account_summary = {
+                "cash": float(self.account.cash),
+                "portfolio_value": float(self.account.portfolio_value),
+                "equity": float(self.account.equity),
+                "buying_power": float(self.account.buying_power),
+                "position_value": position_value,
+                "daily_change": daily_change,
+                "daily_change_percent": daily_change_percent,
+                "last_equity": float(self.account.last_equity),
+                "positions": position_summary,
+                "status": self.account.status,
+                "paper_trading": self.paper_trading
+            }
+            
+            return account_summary
+        except Exception as e:
+            logger.error(f"Error getting account summary: {e}")
+            
+            # Return a basic summary with error information
+            return {
+                "error": str(e),
+                "cash": 0.0,
+                "portfolio_value": 0.0,
+                "equity": 0.0,
+                "buying_power": 0.0,
+                "position_value": 0.0,
+                "positions": [],
+                "status": "error",
+                "paper_trading": self.paper_trading
+            }
+
 # Singleton instance
 alpaca_client = AlpacaClient()

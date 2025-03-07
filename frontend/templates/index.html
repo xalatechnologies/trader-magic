@@ -114,6 +114,31 @@
                 </div>
             </div>
             
+            <div class="account-summary-container" id="account-summary-container">
+                <div class="account-summary-header">
+                    <h3>Account Summary</h3>
+                    <span class="account-type-badge" id="account-type-badge">Loading...</span>
+                </div>
+                <div class="account-metrics">
+                    <div class="account-metric">
+                        <div class="metric-title">Portfolio Value</div>
+                        <div class="metric-value" id="portfolio-value">$0.00</div>
+                    </div>
+                    <div class="account-metric">
+                        <div class="metric-title">Cash Balance</div>
+                        <div class="metric-value" id="cash-balance">$0.00</div>
+                    </div>
+                    <div class="account-metric">
+                        <div class="metric-title">Buying Power</div>
+                        <div class="metric-value" id="buying-power">$0.00</div>
+                    </div>
+                    <div class="account-metric">
+                        <div class="metric-title">Daily Change</div>
+                        <div class="metric-value" id="daily-change">$0.00</div>
+                    </div>
+                </div>
+            </div>
+            
             <div class="symbols-container">
                 {% for symbol in symbols %}
                 <div class="symbol-card" id="card-{{ symbol|replace('/', '-') }}">
@@ -135,6 +160,7 @@
                             <div class="metric-value" id="status-{{ symbol|replace('/', '-') }}">--</div>
                         </div>
                     </div>
+
                     <div class="price-chart-container">
                         <!-- Enforce unique ID and fixed dimensions for canvas -->
                         <canvas 
@@ -146,6 +172,22 @@
                     </div>
                     <div class="trade-info" id="trade-info-{{ symbol|replace('/', '-') }}">
                         <div class="trade-details">No recent trades</div>
+                    </div>
+                    <div class="position-info" id="position-info-{{ symbol|replace('/', '-') }}">
+                        <div class="position-metrics-vertical">
+                            <div class="position-metric-row">
+                                <div class="metric-title">Quantity:</div>
+                                <div class="metric-value" id="position-qty-{{ symbol|replace('/', '-') }}">0</div>
+                            </div>
+                            <div class="position-metric-row">
+                                <div class="metric-title">Value:</div>
+                                <div class="metric-value" id="position-value-{{ symbol|replace('/', '-') }}">$0.00</div>
+                            </div>
+                            <div class="position-metric-row">
+                                <div class="metric-title">P/L:</div>
+                                <div class="metric-value" id="position-pl-{{ symbol|replace('/', '-') }}">$0.00</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 {% endfor %}
@@ -255,6 +297,23 @@
                 </ul>
                 <p>Both update methods only retrieve data from Redis cache, not directly from external APIs. This ensures no additional load on rate-limited services.</p>
 
+                <h3>Account Summary</h3>
+                <p>The account summary section provides key financial metrics:</p>
+                <ul>
+                    <li><strong>Portfolio Value:</strong> Total value of your account</li>
+                    <li><strong>Cash Balance:</strong> Available cash in your account</li>
+                    <li><strong>Buying Power:</strong> Available funds for trading</li>
+                    <li><strong>Daily Change:</strong> Today's portfolio change, color-coded green for positive and red for negative changes</li>
+                </ul>
+
+                <h3>Theme Options</h3>
+                <p>The dashboard supports three theme options, accessible via the theme selector in the top-right corner:</p>
+                <ul>
+                    <li><strong>Auto:</strong> Automatically matches your system's theme preference</li>
+                    <li><strong>Light:</strong> Classic light theme for daytime use</li>
+                    <li><strong>Dark:</strong> Reduced eye strain for nighttime use</li>
+                </ul>
+
                 <h3>TAAPI.io Rate Limits</h3>
                 <p>The system is designed to respect TAAPI.io's rate limits based on your subscription tier:</p>
                 <table>
@@ -305,6 +364,15 @@
                     <li><strong>Stocks:</strong> Use simple ticker symbols like "AAPL", "TSLA", etc. - these will automatically be converted to the right format</li>
                 </ul>
                 <p class="note"><strong>Note:</strong> Free TAAPI accounts are limited to specific symbols only. If you're using the free tier, you may need to upgrade for full symbol support.</p>
+
+                <h3>Debug Mode</h3>
+                <p>When running in debug mode (indicated by a yellow banner at the top), you can:</p>
+                <ul>
+                    <li><strong>Test Trading:</strong> Execute simulated trades directly from the dashboard</li>
+                    <li><strong>Safe Testing:</strong> All trades are simulated locally with no API calls</li>
+                    <li><strong>Instant Feedback:</strong> Get immediate responses about trade decisions</li>
+                </ul>
+                <p>Debug mode is perfect for testing trading strategies and UI functionality without affecting your account.</p>
 
                 <h3>Troubleshooting</h3>
                 <p>If you encounter issues:</p>

@@ -76,9 +76,9 @@ class TradeExecutionService:
             return TradeResult(**data)
         return None
         
-# Listen for setting updates via Redis
-def start_settings_listener():
-    """Start a background thread to listen for settings updates via Redis"""
+# Listen for account info requests and settings updates via Redis
+def start_listeners():
+    """Start background threads to listen for various Redis requests"""
     import json
     import threading
     from dotenv import load_dotenv
@@ -105,11 +105,56 @@ def start_settings_listener():
             except Exception as e:
                 logger.error(f"Error processing settings update: {e}")
     
+    def account_info_listener_thread():
+        from src.utils import redis_client
+        from src.trade_execution.alpaca_client import alpaca_client
+        import json
+        
+        logger.info("Starting account info listener thread")
+        pubsub = redis_client.get_pubsub()
+        pubsub.subscribe('trade_execution_requests')
+        
+        for message in pubsub.listen():
+            try:
+                if message['type'] == 'message':
+                    data = json.loads(message['data'])
+                    logger.info(f"Received trade execution request: {data}")
+                    
+                    # Handle account info requests
+                    if data.get('type') == 'account_info_request':
+                        request_id = data.get('request_id')
+                        if request_id:
+                            try:
+                                # Get account summary from Alpaca
+                                account_summary = alpaca_client.get_account_summary()
+                                
+                                # Store the response in Redis with the request ID
+                                response_key = f'account_info_response:{request_id}'
+                                redis_client.set_json(response_key, account_summary, ttl=60)  # 1 minute TTL
+                                logger.info(f"Sent account info response for request {request_id}")
+                            except Exception as e:
+                                logger.error(f"Error getting account info: {e}")
+                                # Store error response
+                                response_key = f'account_info_response:{request_id}'
+                                error_response = {
+                                    'error': str(e),
+                                    'status': 'error'
+                                }
+                                redis_client.set_json(response_key, error_response, ttl=60)
+            except Exception as e:
+                logger.error(f"Error processing trade execution request: {e}")
+    
     # Start settings listener in a daemon thread
     settings_thread = threading.Thread(target=settings_listener_thread, daemon=True)
     settings_thread.start()
     logger.info("Settings listener thread started")
-    return settings_thread
+    
+    # Start account info listener in a daemon thread
+    account_thread = threading.Thread(target=account_info_listener_thread, daemon=True)
+    account_thread.start()
+    logger.info("Account info listener thread started")
+    
+    return settings_thread, account_thread
 
 # Entry point for running as a standalone module
 def run_standalone():
@@ -121,8 +166,8 @@ def run_standalone():
     # Create the service for standalone use
     service = TradeExecutionService()
     
-    # Start settings listener
-    settings_thread = start_settings_listener()
+    # Start all listeners
+    settings_thread, account_thread = start_listeners()
     
     # Keep the main thread alive and actively check for signals
     try:

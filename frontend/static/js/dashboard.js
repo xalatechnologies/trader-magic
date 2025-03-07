@@ -725,6 +725,254 @@ function updateActivityLog() {
     activityLog.innerHTML = html;
 }
 
+// Function to fetch account information from the API
+function fetchAccountInfo() {
+    console.log('Fetching account info...');
+    return fetch('/api/account')
+        .then(response => {
+            console.log('Account info response status:', response.status);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Account info received:', data);
+            console.log('Positions in account data:', JSON.stringify(data.positions));
+            return data;
+        })
+        .catch(error => {
+            console.error('Error fetching account info:', error);
+            return {
+                error: 'Failed to fetch account data',
+                cash: 0,
+                portfolio_value: 0,
+                buying_power: 0,
+                positions: []
+            };
+        });
+}
+
+// Function to update the account summary UI with the fetched data
+function updateAccountSummary(accountData) {
+    console.log('Updating account summary with data:', accountData);
+    
+    // Update account type badge
+    const accountTypeBadge = document.getElementById('account-type-badge');
+    if (accountTypeBadge) {
+        const isPaperTrading = accountData.paper_trading;
+        accountTypeBadge.textContent = isPaperTrading ? 'Paper Trading' : 'Live Trading';
+        accountTypeBadge.className = 'account-type-badge ' + (isPaperTrading ? 'paper' : 'live');
+    }
+    
+    // Update account metrics
+    document.getElementById('portfolio-value').textContent = '$' + parseFloat(accountData.portfolio_value || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    
+    // Update daily change with color coding
+    const dailyChangeElement = document.getElementById('daily-change');
+    const dailyChange = parseFloat(accountData.daily_change || 0);
+    const dailyChangePercent = parseFloat(accountData.daily_change_percent || 0);
+    
+    // Format the daily change with sign and percentage
+    let formattedValue;
+    if (dailyChange >= 0) {
+        formattedValue = `+$${dailyChange.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} (+${Math.abs(dailyChangePercent).toFixed(2)}%)`;
+    } else {
+        formattedValue = `-$${Math.abs(dailyChange).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} (-${Math.abs(dailyChangePercent).toFixed(2)}%)`;
+    }
+    dailyChangeElement.textContent = formattedValue;
+    
+    // Add color class based on positive or negative change
+    if (dailyChange > 0) {
+        dailyChangeElement.className = 'metric-value positive';
+        dailyChangeElement.style.color = 'var(--success)';
+    } else if (dailyChange < 0) {
+        dailyChangeElement.className = 'metric-value negative';
+        dailyChangeElement.style.color = 'var(--danger)';
+    } else {
+        dailyChangeElement.className = 'metric-value';
+    }
+    
+    document.getElementById('cash-balance').textContent = '$' + parseFloat(accountData.cash || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    document.getElementById('buying-power').textContent = '$' + parseFloat(accountData.buying_power || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    
+    // Update position information in each symbol card
+    const positions = accountData.positions || [];
+    console.log('Positions to display:', positions);
+    
+    // Get all symbols from the UI
+    const symbolCards = document.querySelectorAll('.symbol-card');
+    console.log('Found symbol cards:', symbolCards.length);
+    
+    // First, reset all position displays to show default values
+    symbolCards.forEach(card => {
+        const cardId = card.id;
+        const symbol = cardId.replace('card-', '');
+        console.log('Setting default position display for symbol:', symbol);
+        
+        // Get the position elements
+        const qtyElement = document.getElementById(`position-qty-${symbol}`);
+        const valueElement = document.getElementById(`position-value-${symbol}`);
+        const plElement = document.getElementById(`position-pl-${symbol}`);
+        const positionInfo = document.getElementById(`position-info-${symbol}`);
+        
+        console.log('Position elements found:', {
+            symbol,
+            qtyElement: !!qtyElement,
+            valueElement: !!valueElement,
+            plElement: !!plElement,
+            positionInfo: !!positionInfo
+        });
+        
+        // Set default values (no position)
+        if (qtyElement) qtyElement.textContent = '0';
+        if (valueElement) valueElement.textContent = '$0.00';
+        if (plElement) {
+            plElement.textContent = '$0.00';
+            plElement.className = 'metric-value'; // Remove any positive/negative class
+        }
+        
+        // Add a subtle indicator that there's no position
+        if (qtyElement && valueElement && plElement) {
+            qtyElement.classList.add('no-position');
+            valueElement.classList.add('no-position');
+            plElement.classList.add('no-position');
+        }
+        
+        // Make sure position info is always visible
+        if (positionInfo) {
+            // Remove the no-position class if it exists
+            positionInfo.classList.remove('no-position');
+            // Force display
+            positionInfo.style.display = 'block';
+        }
+    });
+    
+    // Then update cards for symbols that have positions
+    positions.forEach(position => {
+        console.log('Processing position for symbol:', position.symbol);
+        
+        // Convert Alpaca symbol format to our format
+        const alpacaSymbol = position.symbol;
+        
+        // Handle different symbol formats (e.g., BTC/USD vs BTCUSD)
+        let possibleSymbols = [];
+        
+        // Special case handling for common crypto symbols from Alpaca
+        // The key issue is that Alpaca returns USD but our frontend uses USDT
+        if (alpacaSymbol === 'BTCUSD') {
+            possibleSymbols.push(
+                'BTCUSD',
+                'BTC/USD',
+                'BTC/USDT',  // This is what's in our .env file
+                'BTC-USD',
+                'BTC-USDT'
+            );
+            console.log('Special case for BTCUSD -> trying BTC/USDT');
+        } else if (alpacaSymbol === 'ETHUSD') {
+            possibleSymbols.push(
+                'ETHUSD',
+                'ETH/USD',
+                'ETH/USDT',  // This is what's in our .env file
+                'ETH-USD',
+                'ETH-USDT'
+            );
+            console.log('Special case for ETHUSD -> trying ETH/USDT');
+        } else if (alpacaSymbol === 'DOGEUSD') {
+            possibleSymbols.push(
+                'DOGEUSD',
+                'DOGE/USD',
+                'DOGE/USDT',  // This is what's in our .env file
+                'DOGE-USD',
+                'DOGE-USDT'
+            );
+            console.log('Special case for DOGEUSD -> trying DOGE/USDT');
+        }
+        // For crypto symbols like BTCUSD, we need to try both BTCUSD and BTC/USD formats
+        else if (alpacaSymbol.endsWith('USD')) {
+            const base = alpacaSymbol.replace('USD', '');
+            possibleSymbols.push(
+                alpacaSymbol,           // BTCUSD
+                `${base}/USD`,         // BTC/USD
+                `${base}-USD`          // BTC-USD
+            );
+        } else if (alpacaSymbol.includes('/')) {
+            // For symbols with slashes, try both with and without slash
+            const noSlash = alpacaSymbol.replace('/', '');
+            possibleSymbols.push(
+                alpacaSymbol,           // BTC/USD
+                noSlash,               // BTCUSD
+                alpacaSymbol.replace('/', '-') // BTC-USD
+            );
+        } else {
+            // For other symbols, just use as is
+            possibleSymbols.push(alpacaSymbol);
+        }
+        
+        console.log('Possible symbol formats for', alpacaSymbol, ':', possibleSymbols);
+        
+        // Find the matching symbol card
+        let found = false;
+        
+        // Try each possible symbol format
+        for (const sym of possibleSymbols) {
+            // Normalize the symbol for DOM ID (replace / with -)
+            const normalizedSymbol = sym.replace('/', '-');
+            console.log('Checking for normalized symbol:', normalizedSymbol);
+            
+            // Get the position elements
+            const qtyElement = document.getElementById(`position-qty-${normalizedSymbol}`);
+            const valueElement = document.getElementById(`position-value-${normalizedSymbol}`);
+            const plElement = document.getElementById(`position-pl-${normalizedSymbol}`);
+            const positionInfo = document.getElementById(`position-info-${normalizedSymbol}`);
+            
+            console.log('Elements for', normalizedSymbol, ':', {
+                qtyElement: !!qtyElement,
+                valueElement: !!valueElement,
+                plElement: !!plElement,
+                positionInfo: !!positionInfo
+            });
+            
+            // If we found all the elements, update them
+            if (qtyElement && valueElement && plElement) {
+                console.log('Found matching elements for symbol:', normalizedSymbol);
+                found = true;
+                
+                // Get the position data
+                const quantity = parseFloat(position.quantity || 0);
+                const marketValue = parseFloat(position.market_value || 0);
+                const unrealizedPL = parseFloat(position.unrealized_pl || 0);
+                
+                // Determine if P/L is positive or negative
+                const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
+                const plPrefix = unrealizedPL >= 0 ? '+' : '';
+                
+                // Remove the no-position class
+                qtyElement.classList.remove('no-position');
+                valueElement.classList.remove('no-position');
+                plElement.classList.remove('no-position');
+                
+                // Update the position information
+                qtyElement.textContent = quantity.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 8});
+                valueElement.textContent = '$' + marketValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                plElement.textContent = `${plPrefix}$${Math.abs(unrealizedPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                plElement.className = `metric-value ${plClass}`;
+                
+                // Make sure position info is visible
+                if (positionInfo) {
+                    console.log('Showing position info for:', normalizedSymbol);
+                    positionInfo.classList.remove('no-position');
+                    positionInfo.style.display = 'block';
+                }
+                
+                // We found a match, no need to check other formats
+                break;
+            }
+        }
+        
+        if (!found) {
+            console.log('Could not find matching symbol card for position:', position.symbol);
+        }
+    });
+}
+
 function updateDashboard(data) {
     // Store the last received data for force-redrawing without server refresh
     window.lastReceivedData = data;
@@ -773,6 +1021,11 @@ function updateDashboard(data) {
             }
         });
     }
+    
+    // Fetch and update account information
+    fetchAccountInfo().then(accountData => {
+        updateAccountSummary(accountData);
+    });
     
     // Update each symbol card - with extra diagnostics
     Object.keys(data).forEach(symbol => {
@@ -832,6 +1085,10 @@ function updateOllamaStatus(ollamaStatus) {
 fetch('/api/data')
     .then(response => response.json())
     .then(data => {
+        // Also fetch account data on initial load
+        fetchAccountInfo().then(accountData => {
+            updateAccountSummary(accountData);
+        });
         updateDashboard(data);
         
         // Explicitly populate activity history from all signals in data
@@ -1020,6 +1277,11 @@ function debugSignalProcessing() {
 
 // Set up automatic refresh
 setInterval(function() {
+    // Refresh account data every 30 seconds
+    fetchAccountInfo().then(accountData => {
+        updateAccountSummary(accountData);
+    });
+    
     fetch('/api/data')
         .then(response => response.json())
         .then(data => {

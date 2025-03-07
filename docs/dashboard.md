@@ -20,6 +20,18 @@ The TraderMagic dashboard provides a real-time view of your trading activities w
 
 Both automatic and manual refreshes retrieve data from Redis cache, not directly from external APIs, ensuring no additional load on rate-limited services.
 
+## 💰 Account Summary
+
+The account summary section provides key financial metrics:
+
+- **Portfolio Value**: Total value of your account
+- **Cash Balance**: Available cash in your account
+- **Buying Power**: Available funds for trading
+- **Daily Change**: Today's portfolio change (color-coded):
+  - Green: Positive change (+)
+  - Red: Negative change (-)
+  - Shows both dollar amount and percentage
+
 ## 🌙 Theme Options
 
 The dashboard supports light and dark modes:
@@ -27,6 +39,8 @@ The dashboard supports light and dark modes:
 - **Auto**: Follows your system preference
 - **Light**: Classic light theme for daytime use
 - **Dark**: Reduced eye strain for nighttime use
+
+The theme selector ensures all options remain clearly visible regardless of the current theme.
 
 ## 🔧 Trade Settings Control
 
