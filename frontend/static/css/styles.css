@@ -296,6 +296,45 @@ main {
     gap: 1.5rem;
 }
 
+.account-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+
+.warning-message {
+    background-color: rgba(239, 68, 68, 0.1);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.warning-message i {
+    color: var(--danger);
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.warning-message ul {
+    margin: 1rem 0;
+    padding-left: 1.5rem;
+}
+
+.warning-message li {
+    margin-bottom: 0.5rem;
+    color: var(--text);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
 .account-metric {
     flex: 1;
     min-width: 150px;
@@ -851,7 +890,7 @@ footer {
 
 /* Documentation modal */
 .modal {
-    display: none;
+    display: none; /* Hidden by default */
     position: fixed;
     z-index: 1000;
     left: 0;
@@ -860,6 +899,13 @@ footer {
     height: 100%;
     background-color: var(--modal-overlay);
     overflow: auto;
+}
+
+/* When modal is shown */
+.modal.show {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
 }
 
 /* Theme Selector Styles */
@@ -945,6 +991,84 @@ footer {
     max-height: 80vh;
     overflow-y: auto;
     position: relative;
+    height: fit-content; /* Adjust height to fit content */
+}
+
+/* Liquidation modal specific styles */
+#liquidation-modal .modal-content {
+    max-width: 400px;
+    padding: 12px;
+    margin: 15% auto; /* Center vertically at 15% from top instead of fixed 40px */
+    position: relative;
+    height: auto; /* Allow height to adjust to content */
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Prevent extra space */
+}
+
+#liquidation-modal .modal-body {
+    padding-bottom: 0; /* Remove padding at the bottom */
+}
+
+#liquidation-modal .modal-header {
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+}
+
+#liquidation-modal .modal-header h2 {
+    font-size: 1.25rem;
+}
+
+#liquidation-modal .warning-message {
+    background-color: rgba(220, 38, 38, 0.1);
+    border-left: 3px solid var(--danger);
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    margin-bottom: 0.75rem;
+}
+
+#liquidation-modal .warning-row {
+    display: flex;
+    align-items: flex-start;
+}
+
+#liquidation-modal .warning-icon {
+    flex-shrink: 0;
+    margin-right: 0.5rem;
+    padding-top: 2px;
+}
+
+#liquidation-modal .warning-content {
+    flex-grow: 1;
+}
+
+#liquidation-modal .warning-title {
+    margin-bottom: 0.5rem;
+    line-height: 1.2;
+}
+
+#liquidation-modal .warning-message i {
+    color: var(--danger);
+    font-size: 1.1rem;
+}
+
+
+
+#liquidation-modal .warning-message ul {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+}
+
+#liquidation-modal .warning-message li {
+    margin-bottom: 0.25rem;
+}
+
+#liquidation-modal .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    margin-bottom: 0; /* Ensure no extra space at bottom */
 }
 
 .modal-header {

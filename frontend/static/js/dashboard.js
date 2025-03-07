@@ -16,8 +16,12 @@ document.addEventListener("DOMContentLoaded", function() {
     const themeOptions = document.getElementById('theme-options');
     const docsBtn = document.getElementById('docs-btn');
     const helpModal = document.getElementById('help-modal');
-    const closeModalBtn = document.querySelector('.close-modal');
+    const closeModalBtns = document.querySelectorAll('.close-modal');
     const activityLog = document.getElementById('activity-log');
+    const liquidateAllBtn = document.getElementById('liquidate-all-btn');
+    const liquidationModal = document.getElementById('liquidation-modal');
+    const confirmLiquidationBtn = document.getElementById('confirm-liquidation');
+    const cancelLiquidationBtn = document.getElementById('cancel-liquidation');
     
     console.log("Activity log element found:", !!activityLog);
     
@@ -124,20 +128,101 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     });
     
-    // Handle modal
+    // Handle modals
     if (docsBtn && helpModal) {
         docsBtn.addEventListener('click', function() {
-            helpModal.style.display = 'flex';
+            helpModal.classList.add('show');
         });
         
-        closeModalBtn.addEventListener('click', function() {
-            helpModal.style.display = 'none';
+        // Handle liquidation modal
+        if (liquidateAllBtn && liquidationModal) {
+            liquidateAllBtn.addEventListener('click', function() {
+                liquidationModal.classList.add('show');
+            });
+            
+            confirmLiquidationBtn.addEventListener('click', function() {
+                // Disable the button to prevent double-clicks
+                this.disabled = true;
+                this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+                
+                // First, stop all trading
+                fetch('/api/toggle_trading', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ enabled: false })
+                })
+                .then(response => response.json())
+                .then(() => {
+                    // Then liquidate all positions
+                    return fetch('/api/liquidate-all', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Update UI components
+                    updateAllTradingUIComponents(false);
+                    liquidationModal.classList.remove('show');
+                    
+                    // Show success message
+                    const message = `Successfully liquidated all positions. ${data.message || ''}`;
+                    window.activityHistory.unshift({
+                        timestamp: new Date().toISOString(),
+                        type: 'success',
+                        message: message
+                    });
+                    updateActivityLog();
+                    
+                    // Refresh account data
+                    fetchAccountInfo();
+                })
+                .catch(error => {
+                    console.error('Error during liquidation:', error);
+                    window.activityHistory.unshift({
+                        timestamp: new Date().toISOString(),
+                        type: 'error',
+                        message: `Failed to liquidate positions: ${error.message || 'Unknown error'}`
+                    });
+                    updateActivityLog();
+                })
+                .finally(() => {
+                    // Re-enable the button
+                    this.disabled = false;
+                    this.innerHTML = 'Yes, Liquidate All Positions';
+                });
+            });
+            
+            cancelLiquidationBtn.addEventListener('click', function() {
+                liquidationModal.classList.remove('show');
+            });
+            
+            // Close when clicking outside the modal
+            liquidationModal.addEventListener('click', function(e) {
+                if (e.target === liquidationModal) {
+                    liquidationModal.classList.remove('show');
+                }
+            });
+        }
+        
+        // Close button handlers for all modals
+        closeModalBtns.forEach(btn => {
+            btn.addEventListener('click', function() {
+                const modal = this.closest('.modal');
+                if (modal) {
+                    modal.classList.remove('show');
+                }
+            });
         });
         
-        // Close when clicking outside the modal content
+        // Close help modal when clicking outside
         helpModal.addEventListener('click', function(e) {
             if (e.target === helpModal) {
-                helpModal.style.display = 'none';
+                helpModal.classList.remove('show');
             }
         });
     }
