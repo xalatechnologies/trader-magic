@@ -137,6 +137,11 @@
                         <div class="metric-value" id="daily-change">$0.00</div>
                     </div>
                 </div>
+                <div class="account-actions">
+                    <button id="liquidate-all-btn" class="btn btn-danger">
+                        <i class="fas fa-exclamation-triangle"></i> Liquidate All Positions
+                    </button>
+                </div>
             </div>
             
             <div class="symbols-container">
@@ -201,6 +206,38 @@
             </div>
         </div>
     </main>
+
+    <!-- Liquidation Confirmation Modal -->
+    <div id="liquidation-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Confirm Liquidation</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="warning-message">
+                    <div class="warning-row">
+                        <div class="warning-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div class="warning-content">
+                            <div class="warning-title"><strong>Warning:</strong> This action will:</div>
+                            <ul>
+                                <li>Immediately sell all open positions</li>
+                                <li>Stop all active trading processes</li>
+                                <li>This action cannot be undone</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <p>Are you sure you want to proceed?</p>
+                <div class="modal-actions">
+                    <button id="cancel-liquidation" class="btn">Cancel</button>
+                    <button id="confirm-liquidation" class="btn btn-danger">Yes, Liquidate All</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <footer>
         <div class="footer-container">
