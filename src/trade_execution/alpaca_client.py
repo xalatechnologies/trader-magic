@@ -318,15 +318,13 @@ class AlpacaClient:
             if trade_amount > available_cash:
                 logger.warning(f"Insufficient funds for {symbol} buy order. Need ${trade_amount:.2f}, have ${available_cash:.2f}")
                 return 0, price, f"Insufficient funds. Required: ${trade_amount:.2f}, available: ${available_cash:.2f}"
-        else:  # SELL
-            position = self.get_position(symbol)
-            if position:
-                position_qty = getattr(position, 'qty', 0)
-                available_qty = float(position_qty)
-                
-                if trade_amount > available_qty:
-                    logger.warning(f"Insufficient position for {symbol} sell order. Need {trade_amount:.8f} units, have {available_qty:.8f} units")
-                    return 0, price, f"Insufficient position. Required: {trade_amount:.8f} units, available: {available_qty:.8f} units"
+        else:  # SELL (SHORT)
+            # For shorting, we just need to make sure we have enough buying power
+            # We're not selling existing positions, we're shorting
+            buying_power = float(account.buying_power)
+            if trade_amount > buying_power:
+                logger.warning(f"Insufficient buying power for {symbol} short order. Need ${trade_amount:.2f}, have ${buying_power:.2f}")
+                return 0, price, f"Insufficient buying power. Required: ${trade_amount:.2f}, available: ${buying_power:.2f}"
             
         # Apply minimum order size check
         if quantity * price < 10.0:  # Example: $10 minimum order
@@ -497,6 +495,10 @@ class AlpacaClient:
             # Map the decision to an order side
             side = OrderSide.BUY if signal.decision == TradingDecision.BUY else OrderSide.SELL
             
+            # For SELL decisions, we're going to place short positions rather than selling existing holdings
+            if signal.decision == TradingDecision.SELL:
+                logger.info(f"SELL signal for {signal.symbol} will be executed as a SHORT position")
+            
             # Check for pattern day trading rule violations
             pdt_error = self._check_day_trading_rules(signal.symbol, side)
             if pdt_error:
@@ -538,10 +540,8 @@ class AlpacaClient:
                 order_value = quantity * price
                 logger.info(f"Order value: ${order_value:.2f}, account cash: ${float(self.account.cash):.2f}")
             else:
-                position = self.get_position(signal.symbol)
-                if position:
-                    position_qty = getattr(position, 'qty', 0)
-                    logger.info(f"Selling {quantity} of {float(position_qty)} {signal.symbol} units")
+                # For SELL (SHORT), we don't need to check position - we're shorting not selling existing
+                logger.info(f"Shorting {quantity} units of {signal.symbol} @ ${price:.2f}")
             
             # Format the symbol correctly for Alpaca API
             # Determine the appropriate transformation based on symbol type
@@ -656,7 +656,7 @@ class AlpacaClient:
                 return TradeResult(
                     symbol=signal.symbol,
                     decision=signal.decision,
-                    order_id=order_id,
+                    order_id=str(order_id),  # Convert UUID to string
                     quantity=quantity,
                     price=price,
                     status="executed"

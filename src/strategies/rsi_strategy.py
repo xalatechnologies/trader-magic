@@ -55,7 +55,7 @@ class RSIStrategy(BaseStrategy):
             return None
             
         rsi_data = data['rsi']
-        rsi_value = rsi_data.get('value')
+        rsi_value = rsi_data.value
         
         if rsi_value is None:
             logger.warning(f"RSI value is missing for {symbol}")

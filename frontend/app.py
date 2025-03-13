@@ -194,15 +194,38 @@ def get_all_trading_data():
             print(f"Error getting Ollama status from Redis: {e}")
             print(traceback.format_exc())
         
+        # Create a mapping between different format variations of the same symbol
+        symbol_variations = {}
+        for symbol in symbols:
+            # Generate all possible variations
+            if '/' in symbol:
+                base, quote = symbol.split('/')
+                variations = [
+                    symbol,                # Original format e.g. BTC/USDT
+                    f"{base}/USD",         # USD version e.g. BTC/USD
+                    f"{base}{quote}",      # No slash version e.g. BTCUSDT
+                    f"{base}USD",          # USD no slash version e.g. BTCUSD
+                    base                   # Just the base e.g. BTC
+                ]
+                for v in variations:
+                    symbol_variations[v] = symbol
+            else:
+                symbol_variations[symbol] = symbol
+        
+        print(f"Symbol variations map: {symbol_variations}")
+        
         # Get all trading symbols data
         for symbol in symbols:
             symbol_data = {}
             
-            # RSI data
-            rsi_key = f"rsi:{symbol}"
-            rsi_data = redis_client.get_json(rsi_key)
-            if rsi_data:
-                symbol_data['rsi'] = rsi_data
+            # RSI data - check for all possible key variations
+            for symbol_var in [symbol, symbol.replace('/USDT', '/USD'), symbol.replace('/', '')]:
+                rsi_key = f"rsi:{symbol_var}"
+                rsi_data = redis_client.get_json(rsi_key)
+                if rsi_data:
+                    symbol_data['rsi'] = rsi_data
+                    print(f"Found RSI data for {symbol} using key {rsi_key}")
+                    break  # Exit loop once data is found
                 
             # Price data 
             price_key = f"price:{symbol}"
@@ -210,29 +233,58 @@ def get_all_trading_data():
             if price_data:
                 symbol_data['price'] = price_data
                 
-            # Trade signal
-            signal_key = f"signal:{symbol}"
-            signal_data = redis_client.get_json(signal_key)
-            if signal_data:
-                symbol_data['signal'] = signal_data
+            # Trade signal - check all possible key variations
+            signal_found = False
+            for symbol_var in [symbol, symbol.replace('/USDT', '/USD'), symbol.replace('/', '')]:
+                signal_key = f"signal:{symbol_var}"
+                signal_data = redis_client.get_json(signal_key)
+                if signal_data:
+                    # Ensure the symbol is in the correct format in the data
+                    signal_data['symbol'] = symbol  # Normalize to the configured format
+                    symbol_data['signal'] = signal_data
+                    print(f"Found signal for {symbol} using key {signal_key}")
+                    signal_found = True
+                    break  # Exit loop once data is found
+            
+            # If we still don't have a signal, try a broader search
+            if not signal_found:
+                all_signal_keys = redis_client.keys("signal:*")
+                print(f"All signal keys: {all_signal_keys}")
+                for key in all_signal_keys:
+                    signal_symbol = key.replace("signal:", "")
+                    # Check if this signal is for a variation of our symbol
+                    if signal_symbol in symbol_variations and symbol_variations[signal_symbol] == symbol:
+                        signal_data = redis_client.get_json(key)
+                        if signal_data:
+                            # Normalize the symbol
+                            signal_data['symbol'] = symbol
+                            symbol_data['signal'] = signal_data
+                            print(f"Found signal for {symbol} using key {key} via variation lookup")
+                            break
                 
-            # Trading result
-            result_key = f"trade_result:{symbol}"
-            result_data = redis_client.get_json(result_key)
-            if result_data:
-                symbol_data['result'] = result_data
-                print(f"Found trade result for {symbol}: {result_data['status']}")
+            # Trading result - check all possible key variations
+            for symbol_var in [symbol, symbol.replace('/USDT', '/USD'), symbol.replace('/', '')]:
+                result_key = f"trade_result:{symbol_var}"
+                result_data = redis_client.get_json(result_key)
+                if result_data:
+                    # Ensure the symbol is in the correct format in the data
+                    result_data['symbol'] = symbol  # Normalize to the configured format
+                    symbol_data['result'] = result_data
+                    print(f"Found trade result for {symbol} using key {result_key}: {result_data['status']}")
+                    break  # Exit loop once data is found
             else:
                 print(f"No trade result found for {symbol}")
                 
             # Price history data for charts
-            history_key = f"price_history:{symbol}"
-            history_data = redis_client.get_json(history_key)
-            if history_data:
-                # Count how many candles we have for debugging
-                candle_count = len(history_data.get('candles', []))
-                symbol_data['price_history'] = history_data
-                print(f"Retrieved {candle_count} candles for {symbol}")
+            for symbol_var in [symbol, symbol.replace('/USDT', '/USD'), symbol.replace('/', '')]:
+                history_key = f"price_history:{symbol_var}"
+                history_data = redis_client.get_json(history_key)
+                if history_data:
+                    # Count how many candles we have for debugging
+                    candle_count = len(history_data.get('candles', []))
+                    symbol_data['price_history'] = history_data
+                    print(f"Retrieved {candle_count} candles for {symbol} using key {history_key}")
+                    break  # Exit loop once data is found
             
             # Check for invalid Alpaca symbol
             invalid_key = f"alpaca:invalid:{symbol}"
@@ -325,8 +377,20 @@ def redis_listener():
         for message in pubsub.listen():
             try:
                 if message['type'] == 'pmessage':
-                    key = message['channel'].decode('utf-8').replace('__keyspace@0__:', '')
-                    operation = message['data'].decode('utf-8')
+                    # Handle both byte strings and decoded strings
+                    channel = message['channel']
+                    data = message['data']
+                    
+                    # Safely decode if needed
+                    if isinstance(channel, bytes):
+                        key = channel.decode('utf-8').replace('__keyspace@0__:', '')
+                    else:
+                        key = channel.replace('__keyspace@0__:', '')
+                        
+                    if isinstance(data, bytes):
+                        operation = data.decode('utf-8')
+                    else:
+                        operation = data
                     
                     # Only process SET operations for trade results
                     if key.startswith('trade_result:') and operation == 'set':
@@ -1753,7 +1817,18 @@ def refresh_all_transactions():
         
         # Clear account data to force refresh
         account_key = "account:data"
+        account_summary_key = "account_summary"
         redis_client.delete(account_key)
+        redis_client.delete(account_summary_key)
+        
+        # ENHANCEMENT: Also clear API key caches
+        api_keys = redis_client.keys("api_key:*")
+        api_keys_cleared = 0
+        for key in api_keys:
+            redis_client.delete(key)
+            api_keys_cleared += 1
+        
+        print(f"Cleared {api_keys_cleared} API key cache entries")
         
         # Process each symbol
         for symbol in symbols:
@@ -1777,12 +1852,14 @@ def refresh_all_transactions():
         # Also publish to Redis for any other services
         redis_client.publish('trade_notifications', json.dumps({
             "type": "refresh_all",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "api_keys_cleared": api_keys_cleared
         }))
         
         return jsonify({
             "success": True,
             "message": f"Successfully refreshed data for {len(symbols)} symbols",
+            "api_keys_cleared": api_keys_cleared,
             "symbols": symbols
         })
     except Exception as e:
@@ -1791,6 +1868,42 @@ def refresh_all_transactions():
             "success": False,
             "error": str(e)
         })
+
+@app.route('/api/reload_api_keys', methods=['POST'])
+def reload_api_keys():
+    """API endpoint to force reload of API keys from .env file"""
+    try:
+        # Clear account caches
+        redis_client.delete('account_summary')
+        redis_client.delete('account:data')
+        
+        # Delete any cached API keys
+        api_keys = redis_client.keys("api_key:*")
+        for key in api_keys:
+            redis_client.delete(key)
+            
+        # Publish a notification to force services to reload keys
+        redis_client.publish('trade_notifications', json.dumps({
+            "type": "reload_api_keys",
+            "timestamp": datetime.now().isoformat()
+        }))
+        
+        # Emit a Socket.IO event to force frontend refresh
+        socketio.emit('account_update_needed')
+        
+        return jsonify({
+            "success": True,
+            "message": "API keys will be reloaded from .env file. Services may need to be restarted for changes to take effect.",
+            "api_keys_cleared": len(api_keys),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error reloading API keys: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     # Start Redis listener in a background thread

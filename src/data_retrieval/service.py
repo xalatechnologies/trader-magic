@@ -8,6 +8,7 @@ from src.config import config
 from src.utils import get_logger, redis_client, RSIData, PriceCandle, PriceHistory, MarketStatus
 from src.data_retrieval.taapi_client import taapi_client
 from src.data_retrieval.news_client import news_client
+from src.data_retrieval.crypto_news_client import crypto_news_client
 
 logger = get_logger("data_retrieval_service")
 
@@ -20,59 +21,84 @@ class DataRetrievalService:
         self.should_run = True
         self.thread = None
         self.use_news_strategy = config.features.news_strategy  # Access the attribute directly
-
+        
+        # Use the crypto news client instead of Alpaca news
+        self.use_crypto_news = True  # Set to True to use our new crypto news client
+        
+        logger.info(f"Data Retrieval Service initialized with symbols: {', '.join(self.symbols)}")
+        logger.info(f"Poll interval: {self.poll_interval} seconds")
+        logger.info(f"Use news strategy: {self.use_news_strategy}")
+        logger.info(f"Use crypto news: {self.use_crypto_news}")
+    
     def start(self):
-        """
-        Start the data retrieval service in a separate thread
-        """
-        if self.thread and self.thread.is_alive():
-            logger.warning("Data retrieval service is already running")
-            return
-
-        # Force update price history for all symbols on startup
-        logger.info("Initializing price history for all symbols on startup")
-        for symbol in self.symbols:
-            try:
-                logger.info(f"Fetching initial price history for {symbol}")
-                self.update_price_history(symbol)
-                time.sleep(3)  # Add delay to respect rate limits
-            except Exception as e:
-                logger.error(f"Error fetching initial price history for {symbol}: {e}")
-
-        # Start the news client if enabled
+        """Start the data retrieval service in a background thread"""
+        # Start news client if news strategy is enabled
         if self.use_news_strategy:
-            try:
-                logger.info("Initializing news client with symbols: %s", ", ".join(self.symbols))
-                # Configure news client with our symbols
+            if self.use_crypto_news:
+                logger.info("Starting crypto news client...")
+                crypto_news_client.set_subscribed_symbols(self.symbols)
+                crypto_news_client.start()
+            else:
+                logger.info("Starting Alpaca news client...")
                 news_client.set_subscribed_symbols(self.symbols)
-                # Start the news client
                 news_client.start()
-            except Exception as e:
-                logger.error(f"Error starting news client: {e}")
-
+        
+        # Start polling thread
         self.should_run = True
-        self.thread = threading.Thread(target=self._run_service)
-        self.thread.daemon = True
+        self.thread = threading.Thread(target=self._polling_loop, daemon=True)
         self.thread.start()
-        logger.info("Data retrieval service started")
-
+        logger.info("Data Retrieval Service started")
+    
     def stop(self):
-        """
-        Stop the data retrieval service
-        """
+        """Stop the data retrieval service"""
         self.should_run = False
         
-        # Stop the news client if enabled
+        # Stop news client
         if self.use_news_strategy:
-            try:
-                logger.info("Stopping news client")
+            if self.use_crypto_news:
+                crypto_news_client.stop()
+            else:
                 news_client.stop()
-            except Exception as e:
-                logger.error(f"Error stopping news client: {e}")
+                
+        logger.info("Data Retrieval Service stopped")
 
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=10)
-            logger.info("Data retrieval service stopped")
+    def _polling_loop(self):
+        """Main polling loop to fetch data at regular intervals"""
+        logger.info(f"Starting polling loop with interval {self.poll_interval} seconds")
+        
+        while self.should_run:
+            try:
+                logger.info("Fetching data for all symbols...")
+                self.fetch_all_data()
+                
+                # Sleep for the configured interval
+                time.sleep(self.poll_interval)
+            except Exception as e:
+                logger.error(f"Error in polling loop: {e}")
+                # Continue polling even if there's an error
+                time.sleep(10)  # Shorter sleep in case of error
+    
+    def fetch_all_data(self):
+        """Fetch data for all configured symbols"""
+        for symbol in self.symbols:
+            try:
+                # Ensure symbol is properly formatted
+                symbol_clean = symbol.replace('/', '')
+                
+                # Fetch RSI data
+                self.fetch_rsi_data(symbol)
+                
+                # Fetch price history
+                self.fetch_price_history(symbol)
+                
+                logger.info(f"Successfully fetched data for {symbol}")
+            except Exception as e:
+                logger.error(f"Error fetching data for {symbol}: {e}")
+                continue
+                
+        # Update the last poll timestamp in Redis
+        redis_client.set('last_data_poll', datetime.now().isoformat())
+        logger.info("Data fetch cycle completed")
 
     def _run_service(self):
         """
@@ -179,9 +205,39 @@ class DataRetrievalService:
             logger.warning(f"No RSI data found for {symbol}")
             return None
             
-    def update_price_history(self, symbol: str) -> Optional[PriceHistory]:
+    def fetch_rsi_data(self, symbol: str) -> Optional[RSIData]:
+        """
+        Fetch and store RSI data for a symbol
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            RSIData object if successful, None if failed
+        """
+        # Fetch RSI data using the taapi_client
+        rsi_data = taapi_client.get_rsi(symbol)
+        
+        if not rsi_data:
+            logger.warning(f"Failed to get RSI data for {symbol}")
+            return None
+            
+        # Store in Redis with appropriate TTL
+        redis_key = f"rsi:{symbol}"
+        redis_client.set_json(redis_key, rsi_data.dict(), ttl=self.poll_interval * 5)
+        logger.info(f"Stored RSI data for {symbol}: {rsi_data.value}")
+        
+        return rsi_data
+            
+    def fetch_price_history(self, symbol: str) -> Optional[PriceHistory]:
         """
         Fetch and store historical price data for a symbol
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            PriceHistory object if successful, None if failed
         """
         interval = self.price_history_interval
         limit = self.price_history_limit

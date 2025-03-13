@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", function() {
     const connectionStatus = document.getElementById('connection-status');
     const refreshButton = document.getElementById('refresh-btn');
     const refreshApiButton = document.getElementById('refresh-api-btn');
+    const reloadKeysButton = document.getElementById('reload-keys-btn');
     const tradingToggleBtn = document.getElementById('trading-toggle-btn');
     const tradeModeSelect = document.getElementById('trade-mode-select');
     const percentageControls = document.getElementById('percentage-controls');
@@ -108,12 +109,22 @@ document.addEventListener("DOMContentLoaded", function() {
     // Add API refresh button handler
     if (refreshApiButton) {
         refreshApiButton.addEventListener('click', function() {
-            if (!confirm('This will refresh all transactions with new API keys. Continue?')) {
+            if (!confirm('This will refresh all transactions and clear API key caches.\n\nThis helps ensure you are using the most recent API keys from your .env file.\n\nContinue?')) {
                 return;
             }
             
             this.disabled = true;
-            this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing API...';
+            this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing...';
+            
+            // Add to activity history before the request
+            window.activityHistory.unshift({
+                timestamp: new Date().toISOString(),
+                type: 'system',
+                action: 'refresh',
+                symbol: 'SYSTEM',
+                message: 'Refreshing API data and clearing caches...'
+            });
+            updateActivityLog();
             
             // Call the new endpoint for refreshing all transactions
             fetch('/api/refresh_all_transactions', {
@@ -122,55 +133,72 @@ document.addEventListener("DOMContentLoaded", function() {
                     'Content-Type': 'application/json'
                 }
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 console.log('API refresh response:', data);
                 
                 // Show a quick success message
                 if (data.success) {
-                    this.innerHTML = '<i class="fas fa-check"></i> API Refreshed';
+                    const apiKeysCleared = data.api_keys_cleared || 0;
+                    this.innerHTML = '<i class="fas fa-check"></i> Done';
                     
                     // Add to activity history
                     window.activityHistory.unshift({
                         timestamp: new Date().toISOString(),
-                        type: 'system',
-                        message: `API refresh completed: ${data.message}`
+                        type: 'success',
+                        action: 'refresh',
+                        symbol: 'SYSTEM',
+                        message: `API refresh completed: ${data.message}${apiKeysCleared > 0 ? `, cleared ${apiKeysCleared} API key cache entries` : ''}`
                     });
                     updateActivityLog();
                     
-                    // Fetch all data again
-                    return fetch('/api/data');
+                    // Fetch all data again to update the dashboard
+                    return fetch('/api/data')
+                        .then(response => response.json())
+                        .then(data => {
+                            updateDashboard(data);
+                            
+                            // Also update account info explicitly
+                            return fetch('/api/account')
+                                .then(response => response.json())
+                                .then(accountData => {
+                                    updateAccountSummary(accountData);
+                                    console.log('Account refreshed after API refresh');
+                                })
+                                .catch(error => {
+                                    console.error('Error getting account data after refresh:', error);
+                                });
+                        });
                 } else {
-                    this.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
-                    throw new Error(data.error || 'Unknown error');
+                    throw new Error(data.error || 'API refresh failed');
                 }
             })
-            .then(response => response.json())
-            .then(data => {
-                // Update the dashboard with refreshed data
-                updateDashboard(data);
-                
-                // Restore button after 2 seconds
-                setTimeout(() => {
-                    this.disabled = false;
-                    this.innerHTML = '<i class="fas fa-key"></i> Refresh API';
-                }, 2000);
-            })
             .catch(error => {
-                console.error('Error refreshing API data:', error);
+                console.error('Error refreshing API:', error);
                 
                 // Show error state
                 this.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
                 
-                // Add to activity history
+                // Add error message to activity log
                 window.activityHistory.unshift({
                     timestamp: new Date().toISOString(),
                     type: 'error',
+                    action: 'error',
+                    symbol: 'SYSTEM',
                     message: `API refresh failed: ${error.message || 'Unknown error'}`
                 });
                 updateActivityLog();
                 
-                // Restore button after 2 seconds
+                // Alert the user
+                alert(`Error refreshing API: ${error.message || 'Unknown error'}`);
+            })
+            .finally(() => {
+                // Restore button after 2 seconds regardless of success/failure
                 setTimeout(() => {
                     this.disabled = false;
                     this.innerHTML = '<i class="fas fa-key"></i> Refresh API';
@@ -427,6 +455,43 @@ document.addEventListener("DOMContentLoaded", function() {
     
     // Call the function
     initTradeSettings();
+
+    // Add reload API keys button handler
+    if (reloadKeysButton) {
+        reloadKeysButton.addEventListener('click', function() {
+            if (!confirm('This will reload API keys from your .env file and clear any cached keys. Continue?')) {
+                return;
+            }
+            
+            this.disabled = true;
+            this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reloading Keys...';
+            
+            // Call the reloadApiKeys function
+            reloadApiKeys()
+                .then(() => {
+                    // Show success indicator
+                    this.innerHTML = '<i class="fas fa-check"></i> Keys Reloaded';
+                    
+                    // Restore button after 2 seconds
+                    setTimeout(() => {
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-file-code"></i> Use .env Keys';
+                    }, 2000);
+                })
+                .catch(error => {
+                    console.error('Error reloading API keys:', error);
+                    
+                    // Show error state
+                    this.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
+                    
+                    // Restore button after 2 seconds
+                    setTimeout(() => {
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-file-code"></i> Use .env Keys';
+                    }, 2000);
+                });
+        });
+    }
 });
 
 function formatTimestamp(timestamp) {
@@ -836,19 +901,20 @@ function updateSymbolCard(symbol, data) {
         const timestamp = data.timestamp;
         
         // Add to activity if not already in history
+        const normalizedSymbol = normalizeSymbol(symbol);
         const historyItem = {
-            symbol,
+            symbol: normalizedSymbol,
             action,
             timestamp,
             rsi: data.rsi ? data.rsi.value : null,
             status: data.result ? data.result.status : null
         };
         
-        console.log(`Adding to activity history: ${symbol} ${action} (${historyItem.status || 'no status'})`);
+        console.log(`Adding to activity history: ${normalizedSymbol} ${action} (${historyItem.status || 'no status'})`);
         
         // Check if this event is already in the history
         const isDuplicate = window.activityHistory.some(item => 
-            item.symbol === symbol && 
+            normalizeSymbol(item.symbol) === normalizedSymbol && 
             item.action === action && 
             item.timestamp === timestamp
         );
@@ -883,7 +949,10 @@ function updateActivityLog() {
     
     let html = '';
     window.activityHistory.forEach(item => {
-        const time = formatTimestamp(item.timestamp);
+        // Skip invalid items
+        if (!item || typeof item !== 'object') return;
+        
+        const time = formatTimestamp(item.timestamp || new Date().toISOString());
         
         let icon;
         if (item.action === 'buy') {
@@ -895,7 +964,7 @@ function updateActivityLog() {
         }
         
         // Add RSI value if available
-        const rsiText = item.rsi !== null ? `RSI: ${item.rsi.toFixed(2)}` : '';
+        const rsiText = item.rsi !== undefined && item.rsi !== null ? `RSI: ${item.rsi.toFixed(2)}` : '';
         
         // Add status badge for all trades, not just executed ones
         let statusBadge = '';
@@ -908,11 +977,11 @@ function updateActivityLog() {
         }
         
         html += `
-            <div class="activity-item ${item.action}">
+            <div class="activity-item ${item.action || 'unknown'}">
                 ${icon}
                 <div class="activity-details">
-                    <strong>${item.symbol}</strong> 
-                    <span class="activity-action">${item.action.toUpperCase()}</span>
+                    <strong>${item.symbol || 'Unknown'}</strong> 
+                    <span class="activity-action">${item.action ? item.action.toUpperCase() : 'ACTION'}</span>
                     ${rsiText ? `<span class="activity-rsi">(${rsiText})</span>` : ''}
                     ${statusBadge}
                 </div>
@@ -966,8 +1035,24 @@ function updateAccountSummary(accountData) {
     
     // Update daily change with color coding
     const dailyChangeElement = document.getElementById('daily-change');
-    const dailyChange = parseFloat(accountData.daily_change || 0);
-    const dailyChangePercent = parseFloat(accountData.daily_change_percent || 0);
+    
+    // Apply reasonable limits to daily change values to prevent extreme calculations
+    let dailyChange = parseFloat(accountData.daily_change || 0);
+    let dailyChangePercent = parseFloat(accountData.daily_change_percent || 0);
+    
+    // Calculate a reasonable maximum change based on portfolio value
+    const portfolioValue = parseFloat(accountData.portfolio_value || 0);
+    const maxReasonableChange = portfolioValue * 0.15; // 15% as maximum reasonable daily change
+    
+    // Cap the daily change amount if it seems unreasonably high
+    if (Math.abs(dailyChange) > maxReasonableChange && portfolioValue > 0) {
+        console.warn(`Daily change of ${dailyChange} seems unreasonable compared to portfolio value ${portfolioValue}. Capping at 15%.`);
+        // Cap the daily change while preserving the sign
+        dailyChange = dailyChange > 0 ? maxReasonableChange : -maxReasonableChange;
+        
+        // Recalculate the percentage
+        dailyChangePercent = dailyChange / portfolioValue * 100;
+    }
     
     // Format the daily change with sign and percentage
     let formattedValue;
@@ -1194,9 +1279,15 @@ function updateNewsFeed(newsData) {
     
     let html = '';
     newsData.forEach(item => {
-        const time = formatTimestamp(item.timestamp);
-        const symbols = item.symbols.join(', ');
-        const headline = item.headline;
+        // Skip invalid items
+        if (!item || typeof item !== 'object') return;
+        
+        const time = formatTimestamp(item.timestamp || new Date().toISOString());
+        
+        // Ensure item.symbols exists and is an array before using join
+        const symbols = Array.isArray(item.symbols) ? item.symbols.join(', ') : 'Unknown';
+        
+        const headline = item.headline || 'No headline';
         const url = item.url || '#';
         const source = item.source || 'Alpaca';
         
@@ -1221,6 +1312,36 @@ function updateNewsFeed(newsData) {
     });
     
     newsFeed.innerHTML = html;
+}
+
+// Add this helper function near the top of the file, after the document load event
+function normalizeSymbol(symbol) {
+    // Handle various symbol formats (BTC/USD, BTC/USDT, BTCUSD, etc)
+    if (!symbol) return symbol;
+    
+    // If it's already in the preferred format (with slash), return it
+    if (symbol.includes('/')) {
+        // Convert BTC/USD to BTC/USDT if needed
+        if (symbol.endsWith('/USD')) {
+            return symbol.replace('/USD', '/USDT');
+        }
+        return symbol;
+    }
+    
+    // Handle BTCUSD, ETHUSD format
+    if (symbol.endsWith('USD')) {
+        const base = symbol.slice(0, -3);
+        return `${base}/USDT`;
+    }
+    
+    // Handle BTCUSDT format
+    if (symbol.endsWith('USDT')) {
+        const base = symbol.slice(0, -4);
+        return `${base}/USDT`;
+    }
+    
+    // For other formats, just return as is
+    return symbol;
 }
 
 function updateDashboard(data) {
@@ -1304,6 +1425,32 @@ function updateDashboard(data) {
             // Charts are already rendered during updateSymbolCard
         }
     });
+
+    // Explicitly populate activity history from all signals in data
+    console.log("Populating activity history from initial data load");
+    Object.keys(data).forEach(symbol => {
+        if (symbol.startsWith('_')) return; // Skip system keys
+        
+        const symbolData = data[symbol];
+        if (symbolData && symbolData.signal && symbolData.signal.decision) {
+            // Only add buy/sell decisions (skip hold)
+            const decision = symbolData.signal.decision.toLowerCase();
+            if (decision !== 'hold') {
+                const normalizedSymbol = normalizeSymbol(symbol);
+                const historyItem = {
+                    symbol: normalizedSymbol,
+                    action: decision,
+                    timestamp: symbolData.timestamp || new Date().toISOString(),
+                    rsi: symbolData.rsi ? symbolData.rsi.value : null,
+                    status: symbolData.result ? symbolData.result.status : null
+                };
+                
+                // Force add to history
+                window.activityHistory.unshift(historyItem);
+                console.log(`FORCE ADDED ${decision} signal for ${normalizedSymbol} to activity history`);
+            }
+        }
+    });
 }
 
 function updateOllamaStatus(ollamaStatus) {
@@ -1343,40 +1490,6 @@ fetch('/api/data')
             updateAccountSummary(accountData);
         });
         updateDashboard(data);
-        
-        // Explicitly populate activity history from all signals in data
-        console.log("Populating activity history from initial data load");
-        Object.keys(data).forEach(symbol => {
-            if (symbol.startsWith('_')) return; // Skip system keys
-            
-            const symbolData = data[symbol];
-            if (symbolData && symbolData.signal && symbolData.signal.decision) {
-                // Only add buy/sell decisions (skip hold)
-                const decision = symbolData.signal.decision.toLowerCase();
-                if (decision !== 'hold') {
-                    const timestamp = symbolData.timestamp || new Date().toISOString();
-                    const historyItem = {
-                        symbol,
-                        action: decision,
-                        timestamp,
-                        rsi: symbolData.rsi ? symbolData.rsi.value : null,
-                        status: symbolData.result ? symbolData.result.status : null
-                    };
-                    
-                    // Add to history if not a duplicate
-                    const isDuplicate = window.activityHistory.some(item => 
-                        item.symbol === symbol && 
-                        item.action === decision && 
-                        item.timestamp === timestamp
-                    );
-                    
-                    if (!isDuplicate) {
-                        window.activityHistory.unshift(historyItem);
-                        console.log(`Added ${decision} signal for ${symbol} to activity history`);
-                    }
-                }
-            }
-        });
         
         // Update activity log with initial history
         if (window.activityHistory.length > 0) {
@@ -1486,7 +1599,12 @@ function updateAllTradingUIComponents(enabled) {
 // Debug function to check signal processing
 function debugSignalProcessing() {
     fetch('/api/data')
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             console.log("DEBUG: Checking all signals in current data");
             
@@ -1503,8 +1621,9 @@ function debugSignalProcessing() {
                     
                     // If it's a buy/sell, add it to activity history if not already there
                     if (decision !== 'hold') {
+                        const normalizedSymbol = normalizeSymbol(symbol);
                         const historyItem = {
-                            symbol,
+                            symbol: normalizedSymbol,
                             action: decision,
                             timestamp: symbolData.timestamp || new Date().toISOString(),
                             rsi: symbolData.rsi ? symbolData.rsi.value : null,
@@ -1513,7 +1632,7 @@ function debugSignalProcessing() {
                         
                         // Force add to history
                         window.activityHistory.unshift(historyItem);
-                        console.log(`FORCE ADDED ${decision} signal for ${symbol} to activity history`);
+                        console.log(`FORCE ADDED ${decision} signal for ${normalizedSymbol} to activity history`);
                     }
                 }
             });
@@ -1525,6 +1644,15 @@ function debugSignalProcessing() {
         })
         .catch(error => {
             console.error('Error in debug signal check:', error);
+            
+            // Add error to activity history to make it visible
+            window.activityHistory.unshift({
+                timestamp: new Date().toISOString(),
+                symbol: 'DEBUG',
+                action: 'error',
+                message: `Debug signal check failed: ${error.message || 'Unknown error'}`
+            });
+            updateActivityLog();
         });
 }
 
@@ -1661,3 +1789,73 @@ document.addEventListener('keydown', function(event) {
         console.log('Debug refresh buttons toggled');
     }
 });
+
+// Add a separate function to specifically reload API keys from .env file
+async function reloadApiKeys() {
+    console.log('Reloading API keys from .env file...');
+    
+    try {
+        // Show loading message in activity log
+        window.activityHistory.unshift({
+            timestamp: new Date().toISOString(),
+            type: 'system',
+            action: 'info',
+            symbol: 'SYSTEM',
+            message: 'Reloading API keys from .env file...'
+        });
+        updateActivityLog();
+        
+        // Call the API endpoint to reload keys
+        const response = await fetch('/api/reload_api_keys', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            console.log('Successfully reloaded API keys:', data);
+            
+            // Add success message to activity history
+            window.activityHistory.unshift({
+                timestamp: new Date().toISOString(),
+                type: 'success',
+                action: 'reload_keys',
+                symbol: 'SYSTEM',
+                message: `API keys reloaded: ${data.message}`
+            });
+            updateActivityLog();
+            
+            // Show confirmation dialog
+            const message = `API keys have been reloaded from .env file.\n\nFor changes to take full effect, consider restarting the trade_execution service:\ndocker restart trade_execution`;
+            alert(message);
+            
+            // Refresh data after reloading keys
+            return fetch('/api/data')
+                .then(response => response.json())
+                .then(data => {
+                    updateDashboard(data);
+                    console.log('Dashboard updated after API key reload');
+                    return data;
+                });
+        } else {
+            throw new Error(data.error || 'Unknown error');
+        }
+    } catch (error) {
+        console.error('Error reloading API keys:', error);
+        
+        // Add error message to activity history
+        window.activityHistory.unshift({
+            timestamp: new Date().toISOString(),
+            type: 'error',
+            action: 'error',
+            symbol: 'SYSTEM',
+            message: `API key reload failed: ${error.message || 'Unknown error'}`
+        });
+        updateActivityLog();
+        
+        alert(`Error reloading API keys: ${error.message || 'Unknown error'}`);
+    }
+}

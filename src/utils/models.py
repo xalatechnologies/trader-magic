@@ -41,6 +41,7 @@ class TradeSignal(BaseModel):
     confidence: Optional[float] = None
     rsi_value: float
     timestamp: datetime = Field(default_factory=datetime.now)
+    metadata: Optional[dict] = None  # Add metadata field to store strategy information
 
 class TradeResult(BaseModel):
     symbol: str

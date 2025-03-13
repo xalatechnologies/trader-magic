@@ -210,6 +210,8 @@ class StrategyManager:
             symbol: Trading symbol to process
         """
         try:
+            logger.info(f"Processing symbol: {symbol}")
+            
             # Get all data for this symbol
             all_data = self._fetch_symbol_data(symbol)
             
@@ -217,13 +219,21 @@ class StrategyManager:
                 logger.warning(f"No data available for {symbol}")
                 return
                 
+            logger.info(f"Fetched data for {symbol}: {list(all_data.keys())}")
+            if 'rsi' in all_data:
+                logger.info(f"RSI value for {symbol}: {all_data['rsi'].value}")
+                
             # Process with all strategies
+            logger.info(f"Processing {symbol} with {len(self.active_strategies)} strategies")
             signals = self.process_data(symbol, all_data)
             
             # If we got signals, handle them
             if signals:
+                logger.info(f"Generated {len(signals)} signals for {symbol}")
                 for signal in signals:
                     self._handle_signal(signal)
+            else:
+                logger.info(f"No signals generated for {symbol}")
         except Exception as e:
             logger.error(f"Error processing symbol {symbol}: {e}")
     
@@ -241,12 +251,17 @@ class StrategyManager:
         
         # Get RSI data
         from src.data_retrieval import data_retrieval_service
+        logger.info(f"Fetching RSI data for {symbol}")
         rsi_data = data_retrieval_service.get_latest_rsi(symbol)
         if rsi_data:
             all_data['rsi'] = rsi_data
+            logger.info(f"Found RSI data for {symbol}: {rsi_data.value}")
+        else:
+            logger.warning(f"No RSI data found for {symbol}")
             
         # Get price data
         price_key = f"price:{symbol}"
+        logger.info(f"Fetching price data for {symbol}")
         price_data = redis_client.get_json(price_key)
         if price_data:
             all_data['price'] = price_data
@@ -335,7 +350,10 @@ class StrategyManager:
             for message in pubsub.listen():
                 try:
                     if message['type'] == 'message':
-                        data = message['data'].decode('utf-8')
+                        # Handle both string and bytes data types
+                        data = message['data']
+                        if isinstance(data, bytes):
+                            data = data.decode('utf-8')
                         logger.info(f"Received Redis command: {data}")
                         
                         # Parse the JSON data
@@ -359,6 +377,11 @@ class StrategyManager:
                             self.stop_polling()
                             logger.info("Strategy manager polling stopped via Redis")
                             
+                        elif action == 'poll_now':
+                            logger.info("Manual poll triggered via Redis")
+                            # Call the polling loop method directly once
+                            self._process_all_symbols()
+                            
                         else:
                             logger.warning(f"Unknown Redis command action: {action}")
                 except Exception as e:
@@ -375,6 +398,22 @@ class StrategyManager:
         if hasattr(self, 'redis_thread') and self.redis_thread.is_alive():
             # Can't really stop a thread, but we can notify in logs
             logger.info("Redis listener thread will terminate when process exits")
+
+    def _process_all_symbols(self):
+        """Process all configured symbols once"""
+        logger.info("Processing all symbols...")
+        try:
+            # Get all enabled symbols
+            from src.config import config
+            symbols = config.trading.symbols
+            
+            # Process each symbol
+            for symbol in symbols:
+                self._process_symbol(symbol)
+                
+            logger.info("Finished processing all symbols")
+        except Exception as e:
+            logger.error(f"Error processing symbols: {e}")
 
 
 # Singleton instance
