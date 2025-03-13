@@ -212,6 +212,10 @@ class StrategyManager:
         try:
             logger.info(f"Processing symbol: {symbol}")
             
+            # Determine if this is a crypto symbol or stock symbol
+            is_crypto = "/" in symbol
+            is_stock = not is_crypto
+            
             # Get all data for this symbol
             all_data = self._fetch_symbol_data(symbol)
             
@@ -222,10 +226,55 @@ class StrategyManager:
             logger.info(f"Fetched data for {symbol}: {list(all_data.keys())}")
             if 'rsi' in all_data:
                 logger.info(f"RSI value for {symbol}: {all_data['rsi'].value}")
+            
+            # Add symbol type to data
+            all_data['is_crypto'] = is_crypto
+            all_data['is_stock'] = is_stock
+            
+            # Add symbol to the data dictionary
+            all_data['symbol'] = symbol
+            
+            # Select appropriate strategies based on symbol type and available data
+            suitable_strategies = {}
+            
+            for name, strategy in self.active_strategies.items():
+                # Skip disabled strategies
+                if not self.strategy_enabled.get(name, False):
+                    continue
                 
-            # Process with all strategies
-            logger.info(f"Processing {symbol} with {len(self.active_strategies)} strategies")
-            signals = self.process_data(symbol, all_data)
+                # Use RSI Strategy if we have RSI data
+                if name == "RSIStrategy" and 'rsi' in all_data:
+                    suitable_strategies[name] = strategy
+                    
+                # Use News Strategy if we have news sentiment data 
+                elif name == "NewsStrategy" and 'news_sentiment' in all_data:
+                    suitable_strategies[name] = strategy
+                    
+                # Use Polygon strategy only for stocks with polygon data
+                elif name == "PolygonStrategy" and is_stock and any(key.startswith('polygon_') for key in all_data.keys()):
+                    suitable_strategies[name] = strategy
+                    
+            logger.info(f"Selected {len(suitable_strategies)} suitable strategies for {symbol} ({'crypto' if is_crypto else 'stock'})")
+                
+            # Process with suitable strategies
+            signals = []
+            for name, strategy in suitable_strategies.items():
+                # Check if we have all required data for this strategy
+                required_data = strategy.get_required_data()
+                missing_data = [key for key in required_data if key not in all_data]
+                
+                if missing_data:
+                    logger.debug(f"Strategy {name} missing required data: {', '.join(missing_data)}")
+                    continue
+                    
+                # Process data with this strategy
+                try:
+                    signal = strategy.process_data(all_data)
+                    if signal:
+                        logger.info(f"Strategy {name} generated {signal.decision.value} signal for {symbol}")
+                        signals.append(signal)
+                except Exception as e:
+                    logger.error(f"Error processing {symbol} with strategy {name}: {str(e)}")
             
             # If we got signals, handle them
             if signals:
@@ -266,6 +315,26 @@ class StrategyManager:
         if price_data:
             all_data['price'] = price_data
         
+        # Check if this is a stock symbol (without a slash)
+        is_stock = not "/" in symbol
+        
+        # Get Polygon.io data for stock symbols
+        if is_stock:
+            polygon_data_key = f"polygon:bars:{symbol}"
+            logger.info(f"Fetching Polygon.io data for stock symbol {symbol}")
+            polygon_data = redis_client.get_json(polygon_data_key)
+            if polygon_data and 'data' in polygon_data:
+                all_data['polygon_bars'] = polygon_data['data']
+                logger.info(f"Found Polygon.io bars data for {symbol}: {len(polygon_data['data'])} bars")
+                
+                # Also get previous close if available
+                prev_close_key = f"polygon:prev_close:{symbol}"
+                prev_close = redis_client.get_json(prev_close_key)
+                if prev_close and 'data' in prev_close:
+                    all_data['polygon_prev_close'] = prev_close['data']
+            else:
+                logger.warning(f"No Polygon.io data found for {symbol}")
+        
         # Get recent news for this symbol
         all_data['news_sentiment'] = self._get_latest_news_sentiment(symbol)
             
@@ -281,6 +350,14 @@ class StrategyManager:
         Returns:
             Dictionary with news sentiment data or None
         """
+        # First try to get sentiment directly
+        sentiment_key = f"news:{symbol}:sentiment"
+        sentiment_data = redis_client.get_json(sentiment_key)
+        if sentiment_data and 'score' in sentiment_data:
+            logger.info(f"Found direct sentiment data for {symbol}: {sentiment_data['score']}")
+            return sentiment_data
+            
+        # If no direct sentiment, get from news items
         # Get all news items
         news_keys = redis_client.client.keys("news:*")
         if not news_keys:
@@ -290,6 +367,10 @@ class StrategyManager:
         formatted_symbol = symbol.split('/')[0] if '/' in symbol else symbol
         
         for key in news_keys:
+            # Skip sentiment keys
+            if ":sentiment" in key:
+                continue
+                
             news_data = redis_client.get_json(key)
             if not news_data:
                 continue
@@ -316,17 +397,24 @@ class StrategyManager:
         Args:
             signal: Trading signal to handle
         """
-        # Get the strategy that generated this signal
-        strategy_name = signal.metadata.get('strategy_name', 'Unknown') if hasattr(signal, 'metadata') else 'Unknown'
-        
-        # Store the signal in Redis
-        redis_key = f"signal:{signal.symbol}"
-        redis_client.set_json(redis_key, signal.dict(), ttl=3600)  # 1 hour TTL
-        
-        logger.info(f"Stored {signal.decision.value} signal for {signal.symbol} from strategy {strategy_name}")
-        
-        # Notify services through Redis
-        redis_client.client.publish('trade_notifications', f"New trade signal for {signal.symbol}: {signal.decision.value}")
+        try:
+            symbol = signal.symbol
+            decision = signal.decision.value.upper()
+            
+            # Store the signal in Redis
+            redis_key = f"signal:{symbol}"
+            # Convert the Pydantic model to a dictionary for Redis storage
+            signal_dict = signal.dict() if hasattr(signal, 'dict') else vars(signal)
+            signal_dict['timestamp'] = datetime.now().isoformat()
+            redis_client.set_json(redis_key, signal_dict, ttl=3600)  # 1 hour TTL
+            
+            logger.info(f"Stored {decision} signal for {symbol}")
+            
+            # Notify services through Redis
+            redis_client.client.publish('trade_notifications', f"New trade signal for {symbol}: {decision}")
+            redis_client.client.publish('new_trade_signal', symbol)
+        except Exception as e:
+            logger.error(f"Error handling signal: {e}")
 
     def _start_redis_listener(self):
         """Start a Redis listener for strategy commands from the frontend"""

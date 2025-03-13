@@ -38,17 +38,22 @@ class NewsStrategy(BaseStrategy):
         self.negative_threshold = negative_threshold
         logger.info(f"News Strategy configured with positive: {positive_threshold}, negative: {negative_threshold}")
     
-    def process_data(self, symbol: str, data: Dict[str, Any]) -> Optional[TradeSignal]:
+    def process_data(self, data: Dict[str, Any]) -> Optional[TradeSignal]:
         """
         Process news data and generate trading signals
         
         Args:
-            symbol: The trading symbol (e.g., BTC/USD)
-            data: Data containing news and sentiment analysis
+            data: Data dictionary containing symbol and news sentiment analysis
             
         Returns:
             TradeSignal or None if no action should be taken
         """
+        # Extract symbol from data dictionary
+        symbol = data.get('symbol')
+        if not symbol:
+            logger.warning("No symbol provided in data")
+            return None
+            
         # Check if we have news data with sentiment
         if 'news_sentiment' not in data or not data['news_sentiment']:
             logger.debug(f"No news sentiment data available for {symbol}")
@@ -64,7 +69,7 @@ class NewsStrategy(BaseStrategy):
             
         # Make trading decision based on sentiment score
         decision = TradingDecision.HOLD
-        confidence = 0.5  # Default confidence
+        confidence = 0.5
         
         if sentiment_score >= self.positive_threshold:
             # Positive sentiment - potential buy signal

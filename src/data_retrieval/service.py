@@ -9,6 +9,7 @@ from src.utils import get_logger, redis_client, RSIData, PriceCandle, PriceHisto
 from src.data_retrieval.taapi_client import taapi_client
 from src.data_retrieval.news_client import news_client
 from src.data_retrieval.crypto_news_client import crypto_news_client
+from src.data_retrieval.polygon_client import PolygonClient
 
 logger = get_logger("data_retrieval_service")
 
@@ -25,10 +26,24 @@ class DataRetrievalService:
         # Use the crypto news client instead of Alpaca news
         self.use_crypto_news = True  # Set to True to use our new crypto news client
         
+        # Check if Polygon.io API key is set
+        self.use_polygon = bool(config.polygon.api_key)
+        
+        # Create an instance of PolygonClient
+        self.polygon_client = PolygonClient() if self.use_polygon else None
+        
         logger.info(f"Data Retrieval Service initialized with symbols: {', '.join(self.symbols)}")
         logger.info(f"Poll interval: {self.poll_interval} seconds")
         logger.info(f"Use news strategy: {self.use_news_strategy}")
-        logger.info(f"Use crypto news: {self.use_crypto_news}")
+        logger.info(f"Use Polygon.io API: {self.use_polygon}")
+        
+        # Check if symbol format includes the new format (stocks)
+        self.has_stock_symbols = any(not "/" in symbol for symbol in self.symbols)
+        logger.info(f"Has stock symbols: {self.has_stock_symbols}")
+        
+        # Check if symbol format includes crypto format
+        self.has_crypto_symbols = any("/" in symbol for symbol in self.symbols)
+        logger.info(f"Has crypto symbols: {self.has_crypto_symbols}")
     
     def start(self):
         """Start the data retrieval service in a background thread"""
@@ -79,22 +94,41 @@ class DataRetrievalService:
                 time.sleep(10)  # Shorter sleep in case of error
     
     def fetch_all_data(self):
-        """Fetch data for all configured symbols"""
+        """Fetch all data types for all symbols"""
         for symbol in self.symbols:
             try:
-                # Ensure symbol is properly formatted
-                symbol_clean = symbol.replace('/', '')
+                # Check if the symbol is a crypto pair or a stock
+                is_crypto = "/" in symbol
+                is_stock = not is_crypto
                 
-                # Fetch RSI data
-                self.fetch_rsi_data(symbol)
+                logger.info(f"Fetching data for {symbol} ({'crypto' if is_crypto else 'stock'})")
                 
-                # Fetch price history
-                self.fetch_price_history(symbol)
+                # For stocks, use Polygon.io API if available
+                if is_stock and self.use_polygon:
+                    logger.info(f"Fetching Polygon.io data for stock symbol {symbol}")
+                    self.fetch_polygon_data(symbol)
                 
-                logger.info(f"Successfully fetched data for {symbol}")
+                # For crypto, or if enabled for stocks with RSI
+                if is_crypto or (is_stock and config.taapi.fetch_for_stocks):
+                    logger.info(f"Fetching TAAPI data for {symbol}")
+                    # Fetch RSI data
+                    self.fetch_rsi_data(symbol)
+                    
+                    # Fetch price history for charting
+                    self.fetch_price_history(symbol)
+                
+                # Fetch news for the symbol if news strategy is enabled
+                if self.use_news_strategy:
+                    if is_crypto and self.use_crypto_news:
+                        # Use crypto-specific news client for crypto
+                        logger.info(f"Fetching crypto news for {symbol}")
+                        crypto_news_client.fetch_news(symbol)
+                    else:
+                        # Use regular news client for stocks
+                        logger.info(f"Fetching regular news for {symbol}")
+                        news_client.fetch_news(symbol)
             except Exception as e:
-                logger.error(f"Error fetching data for {symbol}: {e}")
-                continue
+                logger.error(f"Error fetching data for {symbol}: {str(e)}")
                 
         # Update the last poll timestamp in Redis
         redis_client.set('last_data_poll', datetime.now().isoformat())
@@ -363,6 +397,92 @@ class DataRetrievalService:
         else:
             logger.warning(f"No price history found for {symbol}")
             return None
+
+    def fetch_polygon_data(self, symbol: str) -> bool:
+        """
+        Fetch stock market data from Polygon.io for a symbol
+        
+        Args:
+            symbol: Stock ticker symbol (e.g., AAPL, TSLA)
+            
+        Returns:
+            True if data was fetched successfully, False otherwise
+        """
+        if not self.use_polygon:
+            logger.debug(f"Polygon.io API is not configured, skipping data fetch for {symbol}")
+            return False
+            
+        try:
+            # Generate a unique request ID for this data
+            request_id = str(uuid.uuid4())
+            
+            # Get the aggregate bars (price data)
+            logger.debug(f"Fetching Polygon.io aggregate bars for {symbol}")
+            bars = self.polygon_client.get_aggregate_bars(
+                symbol=symbol,
+                multiplier=1,
+                timespan="day",
+                limit=10
+            )
+            
+            if not bars:
+                logger.warning(f"No Polygon.io aggregate bars data available for {symbol}")
+                return False
+                
+            # Store the data in Redis with a unique key
+            polygon_data_key = f"polygon:bars:{symbol}"
+            redis_client.set_json(polygon_data_key, {
+                "symbol": symbol,
+                "data": bars,
+                "timestamp": datetime.now().isoformat(),
+                "request_id": request_id
+            })
+            
+            logger.info(f"Successfully stored Polygon.io data for {symbol} with request ID {request_id}")
+            
+            # Try to get previous close data as well
+            prev_close = self.polygon_client.get_previous_close(symbol)
+            if prev_close:
+                prev_close_key = f"polygon:prev_close:{symbol}"
+                redis_client.set_json(prev_close_key, {
+                    "symbol": symbol,
+                    "data": prev_close,
+                    "timestamp": datetime.now().isoformat(),
+                    "request_id": request_id
+                })
+                logger.debug(f"Stored previous close data for {symbol}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error fetching Polygon.io data for {symbol}: {str(e)}")
+            return False
+    
+    def get_latest_polygon_data(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest Polygon.io data for a symbol from Redis
+        
+        Args:
+            symbol: Stock ticker symbol (e.g., AAPL, TSLA)
+            
+        Returns:
+            Dictionary containing Polygon.io data or None if not available
+        """
+        polygon_data_key = f"polygon:bars:{symbol}"
+        data = redis_client.get_json(polygon_data_key)
+        
+        if not data:
+            logger.debug(f"No Polygon.io data found in Redis for {symbol}")
+            return None
+            
+        # Check if data is older than 24 hours
+        timestamp = datetime.fromisoformat(data.get("timestamp", ""))
+        age_seconds = (datetime.now() - timestamp).total_seconds()
+        
+        if age_seconds > 86400:  # 24 hours
+            logger.warning(f"Polygon.io data for {symbol} is older than 24 hours ({age_seconds/3600:.1f} hours)")
+            
+        return data
 
 # Singleton instance
 data_retrieval_service = DataRetrievalService()

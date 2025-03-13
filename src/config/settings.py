@@ -11,12 +11,16 @@ class TaapiConfig(BaseModel):
     rsi_period: int = Field(default_factory=lambda: int(os.getenv("RSI_PERIOD", "14")))
     price_history_interval: str = Field(default_factory=lambda: os.getenv("PRICE_HISTORY_INTERVAL", "5m"))
     price_history_limit: int = Field(default_factory=lambda: int(os.getenv("PRICE_HISTORY_LIMIT", "20")))
+    fetch_for_stocks: bool = Field(default_factory=lambda: os.getenv("TAAPI_FETCH_FOR_STOCKS", "true").lower() == "true")
 
 class AlpacaConfig(BaseModel):
     # API credentials
     api_key: str = Field(default_factory=lambda: os.getenv("ALPACA_API_KEY", ""))
     api_secret: str = Field(default_factory=lambda: os.getenv("ALPACA_API_SECRET", ""))
     base_url: str = Field(default_factory=lambda: os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets"))
+
+class PolygonConfig(BaseModel):
+    api_key: str = Field(default_factory=lambda: os.getenv("POLYGON_API_KEY", ""))
 
 class OpenAIConfig(BaseModel):
     api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
@@ -62,6 +66,7 @@ class FeatureConfig(BaseModel):
 class AppConfig(BaseModel):
     taapi: TaapiConfig = TaapiConfig()
     alpaca: AlpacaConfig = AlpacaConfig()
+    polygon: PolygonConfig = PolygonConfig()
     openai: OpenAIConfig = OpenAIConfig()
     ollama: OllamaConfig = OllamaConfig()
     redis: RedisConfig = RedisConfig()

@@ -22,33 +22,38 @@ class RSIStrategy(BaseStrategy):
     def __init__(self):
         """Initialize the RSI strategy with default thresholds"""
         super().__init__()
-        # Default thresholds
-        self.overbought_threshold = 70.0
-        self.oversold_threshold = 30.0
+        # Default thresholds - more sensitive than standard 30/70
+        self.overbought_threshold = 60.0  # Changed from 70.0
+        self.oversold_threshold = 40.0    # Changed from 30.0
     
-    def configure(self, overbought_threshold: float = 70.0, oversold_threshold: float = 30.0):
+    def configure(self, overbought_threshold: float = 60.0, oversold_threshold: float = 40.0):
         """
         Configure the strategy parameters
         
         Args:
-            overbought_threshold: RSI value above which a SELL signal is generated (default: 70)
-            oversold_threshold: RSI value below which a BUY signal is generated (default: 30)
+            overbought_threshold: RSI value above which a SELL signal is generated (default: 60)
+            oversold_threshold: RSI value below which a BUY signal is generated (default: 40)
         """
         self.overbought_threshold = overbought_threshold
         self.oversold_threshold = oversold_threshold
         logger.info(f"RSI Strategy configured with overbought: {overbought_threshold}, oversold: {oversold_threshold}")
     
-    def process_data(self, symbol: str, data: Dict[str, Any]) -> Optional[TradeSignal]:
+    def process_data(self, data: Dict[str, Any]) -> Optional[TradeSignal]:
         """
         Process RSI data and generate trading signals
         
         Args:
-            symbol: The trading symbol (e.g., BTC/USD)
-            data: Data containing RSI values
+            data: Data dictionary containing symbol and RSI values
             
         Returns:
             TradeSignal or None if no action should be taken
         """
+        # Extract symbol from data dictionary
+        symbol = data.get('symbol')
+        if not symbol:
+            logger.warning("No symbol provided in data")
+            return None
+            
         # Check if we have RSI data
         if 'rsi' not in data or not data['rsi']:
             logger.warning(f"No RSI data available for {symbol}")
@@ -63,7 +68,7 @@ class RSIStrategy(BaseStrategy):
             
         # Make trading decision based on RSI value
         decision = TradingDecision.HOLD
-        confidence = 0.5  # Default confidence
+        confidence = 0.5
         
         if rsi_value <= self.oversold_threshold:
             # Oversold condition - potential buy signal

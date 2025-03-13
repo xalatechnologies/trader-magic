@@ -1,337 +1,416 @@
-import requests
+import os
+import time
 import re
+import logging
+import requests
+import random
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, time as dt_time, timedelta
 import pytz
-from typing import Dict, Any, Optional, List, Tuple
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from datetime import datetime, time
+import json
 
+from src.utils import get_logger, RSIData, PriceHistory, PriceCandle, MarketStatus
 from src.config import config
-from src.utils import get_logger, RSIData, MarketStatus
 
 logger = get_logger("taapi_client")
 
 class TaapiClient:
     def __init__(self):
         self.api_key = config.taapi.api_key
-        self.base_url = "https://api.taapi.io"
         self.rsi_period = config.taapi.rsi_period
+        self.base_url = "https://api.taapi.io"
+        self.last_request_time = 0
+        self.min_request_interval = 16  # Minimum time between requests in seconds for free tier
+        self.retry_count = 0
+        self.max_retries = 3
+        self.backoff_factor = 2  # Exponential backoff factor
         
-        # Stock symbols need to be in specific format for TAAPI
-        self.crypto_exchange = "binance"
-        self.stock_exchange = "NYSE"
+        # Regular expression to detect cryptocurrency symbols like "BTC/USD"
+        self.crypto_pattern = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
         
-        # Define patterns to identify symbol types
-        self.crypto_pattern = re.compile(r'[A-Z0-9]+/[A-Z0-9]+')  # Pattern for crypto pairs like BTC/USDT
-        self.stock_pattern = re.compile(r'^[A-Z]{1,5}$')  # Pattern for stock tickers like AAPL, TSLA
-        
-        # US Eastern timezone for market hours
+        # Set up timezone for market hours checking
         self.eastern_tz = pytz.timezone('US/Eastern')
         
-        # Regular market hours (9:30 AM - 4:00 PM Eastern)
-        self.market_open_time = time(9, 30)
-        self.market_close_time = time(16, 0)
+        # Normal market hours (9:30 AM - 4:00 PM Eastern)
+        self.market_open_time = dt_time(9, 30)
+        self.market_close_time = dt_time(16, 0)
         
         # Extended hours
-        self.pre_market_open_time = time(4, 0)  # 4:00 AM Eastern
-        self.after_hours_close_time = time(20, 0)  # 8:00 PM Eastern
+        self.pre_market_open_time = dt_time(4, 0)  # 4:00 AM Eastern
+        self.after_hours_close_time = dt_time(20, 0)  # 8:00 PM Eastern
         
-        if not self.api_key:
-            logger.error("TAAPI API key is not set")
-            raise ValueError("TAAPI API key is not set")
-            
-        logger.debug(f"Using TAAPI API key: {self.api_key[:10]}...{self.api_key[-10:]}")
-        
-    def _get_market_status(self, symbol: str) -> MarketStatus:
-        """
-        Determine the current market status for a stock symbol
-        
-        Args:
-            symbol: Stock symbol to check
-            
-        Returns:
-            MarketStatus enum indicating current trading status
-        """
-        # Cryptocurrencies trade 24/7
-        if self.crypto_pattern.match(symbol):
-            return MarketStatus.OPEN
-            
-        # For stocks, check current time in Eastern timezone
-        now = datetime.now(self.eastern_tz)
-        current_time = now.time()
-        current_weekday = now.weekday()
-        
-        # Check if it's a weekend (5=Saturday, 6=Sunday)
-        if current_weekday >= 5:
-            return MarketStatus.CLOSED
-            
-        # Check if within regular market hours (9:30 AM - 4:00 PM Eastern)
-        if self.market_open_time <= current_time <= self.market_close_time:
-            return MarketStatus.OPEN
-            
-        # Check if it's pre-market (4:00 AM - 9:30 AM Eastern)
-        elif self.pre_market_open_time <= current_time < self.market_open_time:
-            return MarketStatus.PRE_MARKET
-            
-        # Check if it's after-hours (4:00 PM - 8:00 PM Eastern)
-        elif self.market_close_time < current_time <= self.after_hours_close_time:
-            return MarketStatus.AFTER_HOURS
-            
-        # Outside of all trading hours
-        else:
-            return MarketStatus.CLOSED
-            
+        logger.info(f"TAAPI client initialized with key prefix: {self.api_key[:5]}... and RSI period: {self.rsi_period}")
+    
     def _normalize_symbol(self, symbol: str) -> Tuple[str, str]:
         """
-        Normalize symbol for TAAPI API and determine the correct exchange.
+        Normalize the symbol format for TAAPI API
+        
+        For crypto: Use as-is with binance exchange, but convert BTC/USD to BTC/USDT
+        For stocks: Use symbol directly with type=stocks parameter
+            
+        Returns:
+            Tuple of (normalized_symbol, exchange)
+        """
+        # Check if this is a crypto symbol (contains '/')
+        if self.crypto_pattern.match(symbol):
+            # For crypto, use the symbol as-is and binance as exchange
+            # But convert USD to USDT as TAAPI uses USDT pairs
+            if symbol.endswith('/USD'):
+                normalized_symbol = symbol.replace('/USD', '/USDT')
+                logger.info(f"Converting {symbol} to {normalized_symbol} for TAAPI API")
+                return normalized_symbol, "binance"
+            return symbol, "binance"
+        else:
+            # For stocks, return the symbol as-is and None for exchange
+            # The API will use the type=stocks parameter instead
+            return symbol, None
+            
+    def _wait_for_rate_limit(self):
+        """
+        Wait if needed to respect API rate limits
+        """
+        current_time = time.time()
+        time_since_last_request = current_time - self.last_request_time
+        
+        if time_since_last_request < self.min_request_interval:
+            # Calculate wait time with jitter to avoid request alignment
+            wait_time = self.min_request_interval - time_since_last_request
+            jitter = random.uniform(0, 2)  # Add random jitter between 0-2 seconds
+            wait_time += jitter
+            logger.debug(f"Rate limiting: Waiting {wait_time:.2f} seconds before next request")
+            time.sleep(wait_time)
+            
+        self.last_request_time = time.time()
+    
+    def _handle_rate_limit(self, response):
+        """
+        Handle rate limit response with exponential backoff
         
         Returns:
-            Tuple containing (normalized_symbol, exchange)
+            True if should retry, False if max retries exceeded
         """
-        # If it already has a slash, it's likely a crypto pair
-        if self.crypto_pattern.match(symbol):
-            logger.debug(f"Symbol {symbol} recognized as cryptocurrency pair")
-            return symbol, self.crypto_exchange
-            
-        # If it matches our stock pattern, format it for stocks
-        elif self.stock_pattern.match(symbol):
-            # For stocks, TAAPI expects them in format SYMBOL/USD
-            # Pro tier supports stock symbols, while free tier is limited to specific crypto pairs
-            normalized = f"{symbol}/USD"
-            logger.debug(f"Symbol {symbol} converted to stock format: {normalized}")
-            return normalized, self.stock_exchange
-            
-        # Default case - just pass through and use crypto exchange
-        logger.warning(f"Symbol {symbol} doesn't match known patterns, treating as crypto")
-        return symbol, self.crypto_exchange
-    
-    @retry(
-        stop=stop_after_attempt(5),  # Increased from 3 to 5 attempts
-        wait=wait_exponential(multiplier=1, min=2, max=15),  # Longer max wait time
-        retry=retry_if_exception_type((requests.RequestException, ConnectionError, requests.Timeout)),
-        reraise=True
-    )
+        if response.status_code == 429:  # Too Many Requests
+            self.retry_count += 1
+            if self.retry_count <= self.max_retries:
+                # Calculate backoff time
+                backoff_time = self.min_request_interval * (self.backoff_factor ** self.retry_count)
+                # Add jitter
+                backoff_time += random.uniform(1, 5)
+                logger.warning(f"Rate limited (429). Retry {self.retry_count}/{self.max_retries} after {backoff_time:.1f}s")
+                time.sleep(backoff_time)
+                return True
+            else:
+                logger.error(f"Max retries ({self.max_retries}) exceeded for rate limit")
+                return False
+        return False
+        
     def get_rsi(self, symbol: str, interval: str = "1m") -> Optional[RSIData]:
         """
-        Fetch RSI data for a given symbol from TAAPI.io
+        Get the current RSI value for a symbol
         
         Args:
-            symbol: Trading pair (e.g., BTC/USDT) or stock symbol (e.g., TSLA)
-            interval: Time interval (e.g., 1m, 5m, 15m, 1h, 4h, 1d)
+            symbol: Trading symbol (e.g., BTC/USD or AAPL)
+            interval: Time interval (default: 1m - 1 minute)
             
         Returns:
-            RSIData object or None if request fails
+            RSIData object or None if error
         """
-        # Normalize the symbol and get appropriate exchange
+        # Normalize symbol and get exchange
         normalized_symbol, exchange = self._normalize_symbol(symbol)
         
-        # Build parameters for the request
+        # Determine if this is a stock symbol
+        is_stock = not self.crypto_pattern.match(symbol)
+        
+        if is_stock:
+            logger.info(f"Making TAAPI request for stock {symbol}")
+        else:
+            logger.info(f"Making TAAPI request for {symbol} (normalized to {normalized_symbol} on {exchange})")
+        
+        # Check if API key is configured
+        if not self.api_key:
+            logger.error("TAAPI API key not configured")
+            return None
+            
+        # Wait to respect rate limits
+        self._wait_for_rate_limit()
+        
+        # Reset retry counter for new request
+        self.retry_count = 0
+        
+        # Prepare API parameters
         params = {
             "secret": self.api_key,
-            "exchange": exchange,
             "symbol": normalized_symbol,
             "interval": interval,
             "period": self.rsi_period
         }
         
-        logger.info(f"Making TAAPI request for {symbol} (normalized to {normalized_symbol} on {exchange})")
-        logger.debug(f"Request params: {params}")
+        # Add exchange parameter for crypto symbols
+        if exchange:
+            params["exchange"] = exchange
         
-        try:
-            # Set appropriate timeout based on symbol type (longer for stocks)
-            timeout = 60 if exchange == self.stock_exchange else 30
-            logger.debug(f"Using timeout of {timeout}s for {symbol} ({exchange})")
-            response = requests.get(f"{self.base_url}/rsi", params=params, timeout=timeout)
-            
-            # Handle error responses before raising for status
-            if response.status_code != 200:
-                try:
-                    error_data = response.json() if response.text else {"errors": ["Unknown error"]}
-                except ValueError:  # Includes JSONDecodeError
-                    error_data = {"errors": [f"Invalid JSON response: {response.text}"]}
-                
-                if "errors" in error_data:
-                    error_message = "; ".join(error_data["errors"])
-                    if "Free plans only permits" in error_message:
-                        logger.error(f"Free plan limitation for {symbol}: {error_message}")
-                        logger.error("Make sure you're using one of the allowed symbols: [BTC/USDT,ETH/USDT,XRP/USDT,LTC/USDT,XMR/USDT]")
-                    else:
-                        logger.error(f"API error for {symbol}: {error_message}")
-                    return None
-            
-            response.raise_for_status()
-            
-            # Check if the response is empty
-            if not response.text:
-                logger.error(f"Empty response from TAAPI for {symbol}")
-                return None
-                
+        # Add type parameter for stock symbols
+        if is_stock:
+            params["type"] = "stocks"
+        
+        # Make the request with retry logic
+        while self.retry_count <= self.max_retries:
             try:
-                data = response.json()
-            except ValueError as e:
-                logger.error(f"Invalid JSON response from TAAPI for {symbol}: {e}")
-                logger.error(f"Response text: '{response.text}'")
-                return None
-            
-            if "value" in data:
-                logger.info(f"Received RSI data for {symbol}: {data['value']}")
-                return RSIData(
-                    symbol=symbol,  # Keep original symbol in the data
-                    value=float(data["value"]),
-                    timestamp=datetime.now()
-                )
-            else:
-                logger.error(f"Invalid response from TAAPI for {symbol}: {data}")
+                response = requests.get(f"{self.base_url}/rsi", params=params, timeout=10)
+                
+                # Handle successful response
+                if response.status_code == 200:
+                    data = response.json()
+                    rsi_value = data.get("value")
+                    
+                    if rsi_value is not None:
+                        # Create RSI data object
+                        rsi_data = RSIData(
+                            symbol=symbol,
+                            value=float(rsi_value),
+                            interval=interval,
+                            timestamp=datetime.now()
+                        )
+                        logger.info(f"Got RSI value for {symbol}: {rsi_value}")
+                        return rsi_data
+                    else:
+                        logger.error(f"No RSI value in response for {symbol}")
+                        return None
+                
+                # Handle rate limiting
+                elif response.status_code == 429:
+                    if self._handle_rate_limit(response):
+                        continue  # Retry after backoff
+                    else:
+                        return None  # Max retries exceeded
+                
+                # Handle API errors
+                elif response.status_code >= 400:
+                    try:
+                        error_msg = response.json().get('message', f'HTTP error {response.status_code}')
+                    except:
+                        error_msg = f'HTTP error {response.status_code}'
+                        
+                    logger.error(f"API error for {symbol}: {error_msg}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching RSI data for {symbol}: {e}")
+                
+                # Retry on connection errors
+                self.retry_count += 1
+                if self.retry_count <= self.max_retries:
+                    backoff_time = 2 ** self.retry_count
+                    logger.info(f"Retrying in {backoff_time} seconds... (attempt {self.retry_count}/{self.max_retries})")
+                    time.sleep(backoff_time)
+                    continue
                 return None
                 
-        except requests.Timeout as e:
-            if exchange == self.stock_exchange:
-                logger.error(f"Timeout fetching RSI data for stock symbol {symbol}: {e}")
-                logger.warning(f"Stock symbols may require TAAPI Pro tier. Consider removing {symbol} if using free tier.")
-            else:
-                logger.error(f"Timeout fetching RSI data for {symbol}: {e}")
-            # Don't raise the exception, just return None to avoid stopping the whole process
-            return None
-        except requests.RequestException as e:
-            logger.error(f"Error fetching RSI data for {symbol}: {e}")
-            # Don't raise the exception, just return None to avoid stopping the whole process
-            return None
-            
-    def get_price(self, symbol: str, interval: str = "1m") -> Optional[Dict[str, Any]]:
+            # If we got here without continuing the loop, break
+            break
+                
+        return None
+
+    def get_price(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Fetch current price data for a given symbol from TAAPI.io
+        Get the current price data for a symbol
         
         Args:
-            symbol: Trading pair (e.g., BTC/USDT) or stock symbol (e.g., TSLA)
-            interval: Time interval (e.g., 1m, 5m, 15m, 1h, 4h, 1d)
+            symbol: Trading symbol (e.g., BTC/USD or AAPL)
             
         Returns:
-            Price data or None if request fails
+            Dictionary with price data or None if error
         """
-        # Normalize the symbol and get appropriate exchange
+        # Normalize symbol and get exchange
         normalized_symbol, exchange = self._normalize_symbol(symbol)
         
+        # Determine if this is a stock symbol
+        is_stock = not self.crypto_pattern.match(symbol)
+        
+        # Check if API key is configured
+        if not self.api_key:
+            logger.error("TAAPI API key not configured")
+            return None
+            
+        # Wait to respect rate limits
+        self._wait_for_rate_limit()
+        
+        # Reset retry counter for new request
+        self.retry_count = 0
+        
+        # Prepare API parameters
         params = {
             "secret": self.api_key,
-            "exchange": exchange,
             "symbol": normalized_symbol,
-            "interval": interval
+            "interval": "1m"  # Use 1-minute interval for current price
         }
         
-        logger.debug(f"Making TAAPI price request for {symbol} (normalized to {normalized_symbol})")
+        # Add exchange parameter for crypto symbols
+        if exchange:
+            params["exchange"] = exchange
         
-        try:
-            # Set appropriate timeout based on symbol type (longer for stocks)
-            timeout = 60 if exchange == self.stock_exchange else 30
-            logger.debug(f"Using timeout of {timeout}s for price request ({symbol})")
-            response = requests.get(f"{self.base_url}/candle", params=params, timeout=timeout)
-            
-            if response.status_code != 200:
-                try:
-                    error_data = response.json() if response.text else {"errors": ["Unknown error"]}
-                except ValueError:  # Includes JSONDecodeError
-                    error_data = {"errors": [f"Invalid JSON response: {response.text}"]}
-                
-                if "errors" in error_data:
-                    error_message = "; ".join(error_data["errors"])
-                    logger.error(f"API error for {symbol} price data: {error_message}")
-                return None
-            
-            response.raise_for_status()
-            
-            # Check if the response is empty
-            if not response.text:
-                logger.error(f"Empty response from TAAPI for {symbol} price data")
-                return None
-                
+        # Add type parameter for stock symbols
+        if is_stock:
+            params["type"] = "stocks"
+        
+        # Make the request with retry logic
+        while self.retry_count <= self.max_retries:
             try:
-                data = response.json()
-            except ValueError as e:
-                logger.error(f"Invalid JSON response from TAAPI for {symbol} price data: {e}")
-                logger.error(f"Response text: '{response.text}'")
-                return None
-            
-            logger.info(f"Received price data for {symbol}: {data['close']}")
-            return data
+                response = requests.get(f"{self.base_url}/candle", params=params, timeout=10)
                 
-        except requests.Timeout as e:
-            if exchange == self.stock_exchange:
-                logger.error(f"Timeout fetching price data for stock symbol {symbol}: {e}")
-                logger.warning(f"Stock symbols may require TAAPI Pro tier. Consider removing {symbol} if using free tier.")
-            else:
-                logger.error(f"Timeout fetching price data for {symbol}: {e}")
-            return None
-        except requests.RequestException as e:
-            logger.error(f"Error fetching price data for {symbol}: {e}")
-            return None
-
-    def get_price_history(self, symbol: str, interval: str = "5m", limit: int = 20) -> Optional[List[Dict[str, Any]]]:
+                # Handle successful response
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        "symbol": symbol,
+                        "timestamp": datetime.now().isoformat(),
+                        "open": data.get("open"),
+                        "high": data.get("high"),
+                        "low": data.get("low"),
+                        "close": data.get("close"),
+                        "volume": data.get("volume", 0)
+                    }
+                
+                # Handle rate limiting
+                elif response.status_code == 429:
+                    if self._handle_rate_limit(response):
+                        continue  # Retry after backoff
+                    else:
+                        return None  # Max retries exceeded
+                
+                # Handle other errors
+                else:
+                    try:
+                        error_msg = response.json().get('message', f'HTTP error {response.status_code}')
+                    except:
+                        error_msg = f'HTTP error {response.status_code}'
+                        
+                    logger.error(f"API error for price data - {symbol}: {error_msg}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching price data for {symbol}: {str(e)}")
+                
+                # Retry on connection errors
+                self.retry_count += 1
+                if self.retry_count <= self.max_retries:
+                    backoff_time = 2 ** self.retry_count
+                    logger.info(f"Retrying in {backoff_time} seconds... (attempt {self.retry_count}/{self.max_retries})")
+                    time.sleep(backoff_time)
+                    continue
+                return None
+                
+            # If we got here without continuing the loop, break
+            break
+            
+        return None
+        
+    def get_price_history(self, symbol: str, interval: str = "1h", limit: int = 20) -> Optional[List[Dict[str, Any]]]:
         """
-        Fetch historical price data for a given symbol from TAAPI.io
+        Get historical price data for a symbol
         
         Args:
-            symbol: Trading pair (e.g., BTC/USDT) or stock symbol (e.g., TSLA)
-            interval: Time interval (e.g., 1m, 5m, 15m, 1h, 4h, 1d)
-            limit: Number of candles to retrieve
+            symbol: Trading symbol (e.g., BTC/USD or AAPL)
+            interval: Time interval (default: 1h - 1 hour)
+            limit: Number of candles to return (default: 20)
             
         Returns:
-            List of historical price data or None if request fails
+            List of candle data or None if error
         """
-        # Normalize the symbol and get appropriate exchange
+        # Normalize symbol and get exchange
         normalized_symbol, exchange = self._normalize_symbol(symbol)
         
+        # Determine if this is a stock symbol
+        is_stock = not self.crypto_pattern.match(symbol)
+        
+        # Check if API key is configured
+        if not self.api_key:
+            logger.error("TAAPI API key not configured")
+            return None
+            
+        # Wait to respect rate limits
+        self._wait_for_rate_limit()
+        
+        # Reset retry counter for new request
+        self.retry_count = 0
+        
+        # Prepare API parameters
         params = {
             "secret": self.api_key,
-            "exchange": exchange,
             "symbol": normalized_symbol,
             "interval": interval,
             "limit": limit
         }
         
-        logger.debug(f"Making TAAPI historical price request for {symbol} (normalized to {normalized_symbol})")
+        # Add exchange parameter for crypto symbols
+        if exchange:
+            params["exchange"] = exchange
         
-        try:
-            # Set appropriate timeout based on symbol type (longer for stocks)
-            timeout = 60 if exchange == self.stock_exchange else 30
-            logger.debug(f"Using timeout of {timeout}s for historical price request ({symbol})")
-            response = requests.get(f"{self.base_url}/candles", params=params, timeout=timeout)
-            
-            if response.status_code != 200:
-                try:
-                    error_data = response.json() if response.text else {"errors": ["Unknown error"]}
-                except ValueError:  # Includes JSONDecodeError
-                    error_data = {"errors": [f"Invalid JSON response: {response.text}"]}
-                
-                if "errors" in error_data:
-                    error_message = "; ".join(error_data["errors"])
-                    logger.error(f"API error for {symbol} historical price data: {error_message}")
-                return None
-            
-            response.raise_for_status()
-            
-            # Check if the response is empty
-            if not response.text:
-                logger.error(f"Empty response from TAAPI for {symbol} historical price data")
-                return None
-                
+        # Add type parameter for stock symbols
+        if is_stock:
+            params["type"] = "stocks"
+        
+        # Make the request with retry logic
+        while self.retry_count <= self.max_retries:
             try:
-                data = response.json()
-            except ValueError as e:
-                logger.error(f"Invalid JSON response from TAAPI for {symbol} historical price data: {e}")
-                logger.error(f"Response text: '{response.text}'")
-                return None
-            
-            logger.info(f"Received historical price data for {symbol}: {len(data)} candles")
-            return data
+                response = requests.get(f"{self.base_url}/bulk/candles", params=params, timeout=15)
                 
-        except requests.Timeout as e:
-            if exchange == self.stock_exchange:
-                logger.error(f"Timeout fetching historical price data for stock symbol {symbol}: {e}")
-                logger.warning(f"Stock symbols may require TAAPI Pro tier. Consider removing {symbol} if using free tier.")
-            else:
-                logger.error(f"Timeout fetching historical price data for {symbol}: {e}")
-            return None
-        except requests.RequestException as e:
-            logger.error(f"Error fetching historical price data for {symbol}: {e}")
-            return None
+                # Handle successful response
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        
+                        # Process all candles
+                        candles = []
+                        for candle in data:
+                            # Add timestamp to each candle
+                            timestamp = candle.get("timestampHuman")
+                            if timestamp:
+                                # Convert to timestamp integer
+                                dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                                candle["timestamp"] = int(dt.timestamp())
+                            
+                            candles.append(candle)
+                            
+                        logger.info(f"Got {len(candles)} historical candles for {symbol}")
+                        return candles
+                    except (ValueError, KeyError) as e:
+                        logger.error(f"Error parsing historical price data for {symbol}: {str(e)}")
+                        return None
+                
+                # Handle rate limiting
+                elif response.status_code == 429:
+                    if self._handle_rate_limit(response):
+                        continue  # Retry after backoff
+                    else:
+                        return None  # Max retries exceeded
+                
+                # Handle other errors
+                else:
+                    try:
+                        error_msg = response.json().get('message', f'HTTP error {response.status_code}')
+                    except:
+                        error_msg = f'HTTP error {response.status_code}'
+                        
+                    logger.error(f"API error for {symbol} historical price data: {error_msg}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching historical price data for {symbol}: {str(e)}")
+                
+                # Retry on connection errors
+                self.retry_count += 1
+                if self.retry_count <= self.max_retries:
+                    backoff_time = 2 ** self.retry_count
+                    logger.info(f"Retrying in {backoff_time} seconds... (attempt {self.retry_count}/{self.max_retries})")
+                    time.sleep(backoff_time)
+                    continue
+                return None
+                
+            # If we got here without continuing the loop, break
+            break
+            
+        return None
 
+# Singleton instance
 taapi_client = TaapiClient()

@@ -54,6 +54,51 @@ class CryptoNewsClient:
         
         logger.info(f"Crypto News client initialized with buy threshold: {self.impact_threshold_buy}, sell threshold: {self.impact_threshold_sell}")
     
+    def fetch_news(self, symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Retrieve recent news for a given crypto symbol from Redis
+        
+        Args:
+            symbol: The trading symbol to get news for (e.g., BTC/USD)
+            limit: Maximum number of news items to return
+            
+        Returns:
+            List of news items for the symbol
+        """
+        try:
+            logger.info(f"Fetching crypto news for {symbol}")
+            
+            # Format the symbol to match what's stored in news data
+            formatted_symbol = symbol.split('/')[0] if '/' in symbol else symbol
+            
+            # Get all news items from Redis
+            news_keys = redis_client.client.keys("news:*")
+            if not news_keys:
+                logger.debug(f"No news found in Redis for {symbol}")
+                return []
+                
+            # Find news matching our symbol
+            news_items = []
+            
+            for key in news_keys:
+                news_data = redis_client.get_json(key)
+                if not news_data:
+                    continue
+                    
+                # Check if this news item is about our symbol
+                symbols = news_data.get('symbols', [])
+                if formatted_symbol in symbols:
+                    # Add this news item to the list
+                    news_items.append(news_data)
+                    
+            # Sort by timestamp (newest first) and limit results
+            news_items.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            return news_items[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error fetching news for {symbol}: {e}")
+            return []
+    
     def set_subscribed_symbols(self, symbols: List[str]):
         """Set the list of symbols to track for news"""
         # Convert symbols to format expected by news APIs
