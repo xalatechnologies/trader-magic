@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", function() {
     // Grab UI elements
     const connectionStatus = document.getElementById('connection-status');
     const refreshButton = document.getElementById('refresh-btn');
+    const refreshApiButton = document.getElementById('refresh-api-btn');
     const tradingToggleBtn = document.getElementById('trading-toggle-btn');
     const tradeModeSelect = document.getElementById('trade-mode-select');
     const percentageControls = document.getElementById('percentage-controls');
@@ -34,6 +35,9 @@ document.addEventListener("DOMContentLoaded", function() {
     // Socket events
     socket.on('connect', function() {
         connectionStatus.innerHTML = '<i class="fas fa-circle-check" style="color: green;"></i> Connected';
+        
+        // Register for transaction updates
+        socket.emit('register_for_transaction_updates');
     });
     
     socket.on('disconnect', function() {
@@ -42,6 +46,42 @@ document.addEventListener("DOMContentLoaded", function() {
     
     socket.on('data_update', function(data) {
         updateDashboard(data);
+    });
+    
+    // Listen for account update events
+    socket.on('account_update_needed', function() {
+        console.log('Account update notification received');
+        // Immediately fetch and update account data
+        fetchAccountInfo().then(accountData => {
+            updateAccountSummary(accountData);
+            console.log('Account data updated due to transaction notification');
+        }).catch(error => {
+            console.error('Error updating account data:', error);
+        });
+    });
+    
+    // Listen for transaction complete events to immediately update affected cards
+    socket.on('transaction_complete', function(data) {
+        console.log('Transaction complete notification received:', data);
+        if (data.symbol) {
+            // First update account data for immediate balance changes
+            fetchAccountInfo().then(accountData => {
+                updateAccountSummary(accountData);
+            });
+            
+            // Then refresh the specific card for this transaction
+            refreshCard(data.symbol);
+            
+            // Add a notification to activity history
+            window.activityHistory.unshift({
+                symbol: data.symbol,
+                action: data.decision || 'transaction',
+                timestamp: data.timestamp || new Date().toISOString(),
+                status: 'executed',
+                message: `Real-time update: ${data.decision || 'Transaction'} executed for ${data.symbol}`
+            });
+            updateActivityLog();
+        }
     });
     
     // Event listeners for UI controls
@@ -62,6 +102,80 @@ document.addEventListener("DOMContentLoaded", function() {
                     this.disabled = false;
                     this.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
                 });
+        });
+    }
+    
+    // Add API refresh button handler
+    if (refreshApiButton) {
+        refreshApiButton.addEventListener('click', function() {
+            if (!confirm('This will refresh all transactions with new API keys. Continue?')) {
+                return;
+            }
+            
+            this.disabled = true;
+            this.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing API...';
+            
+            // Call the new endpoint for refreshing all transactions
+            fetch('/api/refresh_all_transactions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('API refresh response:', data);
+                
+                // Show a quick success message
+                if (data.success) {
+                    this.innerHTML = '<i class="fas fa-check"></i> API Refreshed';
+                    
+                    // Add to activity history
+                    window.activityHistory.unshift({
+                        timestamp: new Date().toISOString(),
+                        type: 'system',
+                        message: `API refresh completed: ${data.message}`
+                    });
+                    updateActivityLog();
+                    
+                    // Fetch all data again
+                    return fetch('/api/data');
+                } else {
+                    this.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
+                    throw new Error(data.error || 'Unknown error');
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Update the dashboard with refreshed data
+                updateDashboard(data);
+                
+                // Restore button after 2 seconds
+                setTimeout(() => {
+                    this.disabled = false;
+                    this.innerHTML = '<i class="fas fa-key"></i> Refresh API';
+                }, 2000);
+            })
+            .catch(error => {
+                console.error('Error refreshing API data:', error);
+                
+                // Show error state
+                this.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
+                
+                // Add to activity history
+                window.activityHistory.unshift({
+                    timestamp: new Date().toISOString(),
+                    type: 'error',
+                    message: `API refresh failed: ${error.message || 'Unknown error'}`
+                });
+                updateActivityLog();
+                
+                // Restore button after 2 seconds
+                setTimeout(() => {
+                    this.disabled = false;
+                    this.innerHTML = '<i class="fas fa-key"></i> Refresh API';
+                }, 2000);
+            });
         });
     }
     
@@ -1058,27 +1172,72 @@ function updateAccountSummary(accountData) {
     });
 }
 
+// Add global variable to store news history
+window.newsItems = [];
+
+// Add a new function to update the news feed
+function updateNewsFeed(newsData) {
+    const newsFeed = document.getElementById('news-feed');
+    
+    if (!newsFeed) {
+        console.error("News feed element not found!");
+        return;
+    }
+    
+    if (!newsData || newsData.length === 0) {
+        console.log("No news data available, showing empty feed message");
+        newsFeed.innerHTML = '<div class="empty-log">No recent news</div>';
+        return;
+    }
+    
+    console.log(`Updating news feed with ${newsData.length} items`);
+    
+    let html = '';
+    newsData.forEach(item => {
+        const time = formatTimestamp(item.timestamp);
+        const symbols = item.symbols.join(', ');
+        const headline = item.headline;
+        const url = item.url || '#';
+        const source = item.source || 'Alpaca';
+        
+        // Create a clickable headline if URL is available
+        const headlineHtml = url && url !== '#' 
+            ? `<a href="${url}" target="_blank" class="news-headline">${headline} <i class="fas fa-external-link-alt"></i></a>` 
+            : `<span class="news-headline">${headline}</span>`;
+
+        html += `
+            <div class="news-item">
+                <i class="fas fa-newspaper"></i>
+                <div class="news-details">
+                    ${headlineHtml}
+                    <div class="news-meta">
+                        <span class="news-symbols">${symbols}</span>
+                        <span class="news-source">Source: ${source}</span>
+                        <span class="news-time">${time}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    newsFeed.innerHTML = html;
+}
+
 function updateDashboard(data) {
     // Store the last received data for force-redrawing without server refresh
     window.lastReceivedData = data;
     
     // Get trading status but DON'T clear executed trades
     // This allows us to show trade history in Recent Activity
-    const tradingEnabled = data._system && data._system.trading_enabled;
-    
-    // Store system data for other functions to access
-    if (data._system) {
-        window.latestSystemData = data._system;
-    }
+    const tradingEnabled = data.trading_enabled;
     
     // Update Ollama status if present
-    if (data._system && data._system.ollama_status) {
-        updateOllamaStatus(data._system.ollama_status);
+    if (data.ollama_status) {
+        updateOllamaStatus(data.ollama_status);
     }
     
     // Update trading enabled status in UI if provided
-    if (data._system && data._system.trading_enabled !== undefined) {
-        const tradingEnabled = data._system.trading_enabled;
+    if (data.trading_enabled !== undefined) {
         console.log("Trading enabled status from server:", tradingEnabled);
         
         // Use centralized function to update all trading UI components
@@ -1087,6 +1246,13 @@ function updateDashboard(data) {
     
     // DIAGNOSTIC: Check what data we're getting
     console.log("RECEIVED DATA UPDATE:", Object.keys(data));
+    
+    // Update news feed if data is available
+    if (data.recent_news) {
+        console.log("Received news data:", data.recent_news);
+        window.newsItems = data.recent_news;
+        updateNewsFeed(window.newsItems);
+    }
     
     // LOOK DIRECTLY at the symbol data to see what's there
     if (data["BTC/USDT"]) {
@@ -1114,7 +1280,9 @@ function updateDashboard(data) {
     
     // Update each symbol card - with extra diagnostics
     Object.keys(data).forEach(symbol => {
-        if (symbol !== '_system' && symbol !== '_debug' && symbol !== '_trade_results') {
+        if (symbol !== '_system' && symbol !== '_debug' && symbol !== '_trade_results' && 
+            symbol !== 'recent_news' && symbol !== 'trading_enabled' && 
+            symbol !== 'ollama_status' && symbol !== 'account') {
             // CRUCIAL DEBUG CHECK: Check if this symbol has a disabled message
             if (data[symbol] && data[symbol].result && 
                 data[symbol].result.status === 'skipped' && 
@@ -1360,9 +1528,10 @@ function debugSignalProcessing() {
         });
 }
 
-// Set up automatic refresh
+// Set up automatic refresh - changed from 15 seconds to 2 minutes (120000ms)
 setInterval(function() {
-    // Refresh account data every 30 seconds
+    console.log("Performing scheduled 2-minute refresh...");
+    // Refresh account data
     fetchAccountInfo().then(accountData => {
         updateAccountSummary(accountData);
     });
@@ -1371,20 +1540,12 @@ setInterval(function() {
         .then(response => response.json())
         .then(data => {
             updateDashboard(data);
-            
-            // Run debug signal processing after every 3rd regular update
-            if (Math.random() < 0.3) {
-                console.log("Running debug signal processing...");
-                debugSignalProcessing();
-            }
-            
-            // Charts are already rendered during updateDashboard
-            console.log("🔄 Dashboard updated with latest data");
+            console.log("🔄 Dashboard updated with latest data (2-minute refresh)");
         })
         .catch(error => {
             console.error('Error in auto refresh:', error);
         });
-}, 15000); // Refresh every 15 seconds
+}, 120000); // Refresh every 2 minutes (120000ms) instead of 15 seconds
 
 // Run the debug function once after 5 seconds
 setTimeout(debugSignalProcessing, 5000);
@@ -1403,4 +1564,100 @@ window.addEventListener('resize', () => {
             .then(data => updateDashboard(data))
             .catch(error => console.error('Error updating after resize:', error));
     }, 250);
+});
+
+// Function to refresh a single card manually - helpful for debugging
+async function refreshCard(symbol) {
+    console.log(`Manual refresh requested for card: ${symbol}`);
+    
+    try {
+        // Get the button that was clicked and show loading state
+        const symbolKey = symbol.replace('/', '-');
+        const refreshBtn = document.querySelector(`#card-${symbolKey} .refresh-card-btn`);
+        if (refreshBtn) {
+            refreshBtn.innerHTML = '⏳';
+            refreshBtn.disabled = true;
+        }
+        
+        // First, try to refresh just the trade result
+        const tradeRefreshResponse = await fetch(`/api/refresh_trade/${encodeURIComponent(symbol)}`);
+        const tradeData = await tradeRefreshResponse.json();
+        
+        if (tradeData.success && tradeData.result) {
+            console.log(`Successfully refreshed trade result for ${symbol}:`, tradeData.result);
+        } else {
+            console.warn(`No trade result found for ${symbol} in refresh`);
+        }
+        
+        // Then fetch all data to update the card
+        const response = await fetch('/api/data');
+        const data = await response.json();
+        
+        // Check if we have data for this symbol
+        if (data[symbol]) {
+            console.log(`Refreshing card for ${symbol} with data:`, data[symbol]);
+            
+            // If we got a trade result directly, make sure it's in the data
+            if (tradeData.success && tradeData.result) {
+                // Update the data to include the refreshed trade result
+                data[symbol].result = tradeData.result;
+                console.log(`Updated ${symbol} data with fresh trade result`);
+            }
+            
+            // Check specifically if we have a trade result
+            if (data[symbol].result) {
+                console.log(`Found trade result for ${symbol}:`, data[symbol].result);
+            } else {
+                console.warn(`No trade result found for ${symbol} in refresh`);
+            }
+            
+            // Update the card
+            updateSymbolCard(symbol, data[symbol]);
+            
+            // Show success indicator
+            if (refreshBtn) {
+                refreshBtn.innerHTML = '✅';
+                setTimeout(() => {
+                    refreshBtn.innerHTML = '🔄';
+                    refreshBtn.disabled = false;
+                }, 1000);
+            }
+        } else {
+            console.error(`No data found for ${symbol} in refresh`);
+            
+            // Show error indicator
+            if (refreshBtn) {
+                refreshBtn.innerHTML = '❌';
+                setTimeout(() => {
+                    refreshBtn.innerHTML = '🔄';
+                    refreshBtn.disabled = false;
+                }, 1000);
+            }
+        }
+    } catch (error) {
+        console.error(`Error refreshing card for ${symbol}:`, error);
+        
+        // Get the button that was clicked and show error state
+        const symbolKey = symbol.replace('/', '-');
+        const refreshBtn = document.querySelector(`#card-${symbolKey} .refresh-card-btn`);
+        if (refreshBtn) {
+            refreshBtn.innerHTML = '❌';
+            setTimeout(() => {
+                refreshBtn.innerHTML = '🔄';
+                refreshBtn.disabled = false;
+            }, 1000);
+        }
+    }
+}
+
+// Make the refresh buttons visible in dev mode
+document.addEventListener('keydown', function(event) {
+    // Ctrl+Shift+D to toggle debug mode
+    if (event.ctrlKey && event.shiftKey && event.key === 'D') {
+        const refreshBtns = document.querySelectorAll('.refresh-card-btn');
+        refreshBtns.forEach(btn => {
+            btn.style.display = btn.style.display === 'none' ? 'inline-block' : 'none';
+        });
+        console.log('Debug refresh buttons toggled');
+    }
 });

@@ -20,7 +20,13 @@ class AlpacaClient:
         self.max_day_trades = 3  # PDT rule allows 3 day trades in 5 business days
         self.day_trade_history = []  # Store recent day trades
         self.enforce_pdt_rules = False  # Disable PDT rules for now
-        self.paper_trading = True  # Assume paper trading for safety
+        
+        # Read paper_trading from environment variable
+        paper_trading_env = os.getenv("PAPER_TRADING", "true")
+        self.paper_trading = paper_trading_env.lower() == "true"
+        
+        # Log the paper_trading value and its source
+        logger.info(f"PAPER_TRADING environment variable: {paper_trading_env}")
         
         # Validate credentials 
         if not self.api_key or not self.api_secret:
@@ -252,107 +258,82 @@ class AlpacaClient:
     
     def _calculate_order_quantity(self, symbol: str, side: OrderSide) -> Tuple[float, float, Optional[str]]:
         """
-        Calculate order quantity based on portfolio percentage and check if sufficient balance
+        Calculate the order quantity based on the fixed amount or percentage
         
         Args:
-            symbol: Asset symbol
+            symbol: Trading symbol
             side: Buy or sell
             
         Returns:
-            Tuple of (quantity, current_price, error_message)
-            If error_message is not None, quantity will be 0 and the trade should be skipped
+            Tuple of (quantity, price, error_message)
+            If error_message is not None, the trade should be skipped
         """
+        # Get current price (we need this regardless of fixed or percentage)
+        price = self._get_current_price(symbol)
+        if price <= 0:
+            return 0, price, f"Invalid price for {symbol}: {price}"
+            
+        logger.info(f"Current price for {symbol}: ${price:.2f}")
+        
+        # Get account info
         try:
-            # Get current price using our updated method
-            current_price = self._get_current_price(symbol)
-            error_message = None
-            
-            # Log the price we're using
-            logger.info(f"Current price for {symbol}: ${current_price:.2f}")
-            
-            # Refresh account info to get latest balances
-            try:
-                self.account = self.client.get_account()
-                available_cash = float(self.account.cash)
-                portfolio_value = float(self.account.portfolio_value)
-                logger.info(f"Account info - Cash: ${available_cash:.2f}, Portfolio: ${portfolio_value:.2f}")
-            except Exception as e:
-                logger.error(f"Error getting account info: {e}")
-                error_message = f"Error getting account info: {e}"
-                return 0.0, current_price, error_message
-            
-            if side == OrderSide.BUY:
-                # Determine trade amount based on settings (fixed amount or percentage)
-                if config.trading.use_fixed_amount:
-                    trade_amount = config.trading.trade_fixed_amount
-                    logger.info(f"Trade amount for {symbol}: ${trade_amount:.2f} (fixed amount)")
-                else:
-                    # Calculate based on portfolio percentage
-                    trade_amount = portfolio_value * (config.trading.trade_percentage / 100)
-                    logger.info(f"Trade amount for {symbol}: ${trade_amount:.2f} ({config.trading.trade_percentage}% of portfolio)")
-                
-                # Validate we have enough cash
-                if trade_amount > available_cash:
-                    logger.warning(f"Insufficient funds for {symbol} buy order. Need ${trade_amount:.2f}, have ${available_cash:.2f}")
-                    error_message = f"Insufficient funds. Required: ${trade_amount:.2f}, available: ${available_cash:.2f}"
-                    return 0.0, current_price, error_message
-                
-                # Calculate the quantity
-                quantity = trade_amount / current_price
-                
-                # Log the quantity
-                logger.info(f"Planning to buy {quantity:.8f} units of {symbol} at ${current_price:.2f}")
-                
-                # Apply minimum quantity check for crypto
-                if "BTC" in symbol and quantity < 0.001:
-                    logger.warning(f"BTC quantity too small: {quantity:.8f} (min: 0.001)")
-                    error_message = f"BTC quantity too small: {quantity:.8f} (min: 0.001)"
-                    return 0.0, current_price, error_message
-                elif "ETH" in symbol and quantity < 0.01:
-                    logger.warning(f"ETH quantity too small: {quantity:.8f} (min: 0.01)")
-                    error_message = f"ETH quantity too small: {quantity:.8f} (min: 0.01)"
-                    return 0.0, current_price, error_message
-            else:  # SELL
-                # Get current position
-                position = self.get_position(symbol)
-                if position:
-                    # Ensure we're not selling more than we own
-                    position_qty = getattr(position, 'qty', 0)
-                    available_qty = float(position_qty)
-                    
-                    # Calculate sell quantity based on settings (fixed amount or percentage)
-                    if config.trading.use_fixed_amount:
-                        # Calculate quantity based on fixed USD amount
-                        proposed_qty = min(config.trading.trade_fixed_amount / current_price, available_qty)
-                        logger.info(f"Planning to sell ${config.trading.trade_fixed_amount:.2f} worth of {symbol} ({proposed_qty:.8f} units)")
-                    else:
-                        # Calculate based on percentage of position
-                        proposed_qty = available_qty * (config.trading.trade_percentage / 100)
-                        logger.info(f"Planning to sell {proposed_qty:.8f} of {available_qty:.8f} {symbol} units ({config.trading.trade_percentage}%)")
-                    
-                    if proposed_qty <= 0 or proposed_qty > available_qty:
-                        logger.warning(f"Invalid sell quantity for {symbol}. Proposed: {proposed_qty:.8f}, Available: {available_qty:.8f}")
-                        error_message = f"Invalid sell quantity. Available: {available_qty:.8f}"
-                        return 0.0, current_price, error_message
-                        
-                    quantity = proposed_qty
-                else:
-                    logger.warning(f"No position found for {symbol}, cannot sell")
-                    error_message = "No position to sell"
-                    return 0.0, current_price, error_message
-            
-            # Apply minimum order size check
-            if quantity * current_price < 10.0:  # Example: $10 minimum order
-                logger.warning(f"Order value too small: ${quantity * current_price:.2f} for {symbol}")
-                error_message = f"Order value too small: ${quantity * current_price:.2f} (minimum $10)"
-                return 0.0, current_price, error_message
-                
-            # Return the calculated quantity
-            return quantity, current_price, None
-            
+            account = self.client.get_account()
+            logger.info(f"Account info - Cash: ${float(account.cash):.2f}, Portfolio: ${float(account.portfolio_value):.2f}")
         except Exception as e:
-            logger.error(f"Error calculating order quantity: {e}")
-            return 0.0, current_price, f"Error: {e}"
+            logger.error(f"Error getting account info: {e}")
+            return 0, price, f"Error getting account info: {e}"
+        
+        # Calculate trade amount based on fixed amount or percentage
+        from src.config import config
+        
+        # Use a larger fixed amount for BTC/USDT to meet minimum order size
+        if symbol == "BTC/USDT":
+            trade_amount = 50.0
+            logger.info(f"Trade amount for {symbol}: ${trade_amount:.2f} (special fixed amount for BTC/USDT)")
+        elif config.trading.use_fixed_amount:
+            trade_amount = config.trading.trade_fixed_amount
+            logger.info(f"Trade amount for {symbol}: ${trade_amount:.2f} (fixed amount)")
+        else:
+            # Use percentage of portfolio value
+            portfolio_value = float(account.portfolio_value)
+            trade_amount = portfolio_value * (config.trading.trade_percentage / 100)
+            logger.info(f"Trade amount for {symbol}: ${trade_amount:.2f} ({config.trading.trade_percentage}% of portfolio)")
+        
+        # Calculate quantity
+        quantity = trade_amount / price
+        
+        # Round quantity based on USD value
+        if "BTC" in symbol:
+            quantity = round(quantity, 8)  # 8 decimals for BTC
+        elif "ETH" in symbol:
+            quantity = round(quantity, 6)  # 6 decimals for ETH
+        else:
+            quantity = round(quantity, 2)  # 2 decimals for stocks
+            
+        logger.info(f"Planning to {side.value} {quantity} units of {symbol} at ${price:.2f}")
+        
+        # Validate funds
+        available_cash = float(account.cash)
+        if side == OrderSide.BUY:
+            if trade_amount > available_cash:
+                logger.warning(f"Insufficient funds for {symbol} buy order. Need ${trade_amount:.2f}, have ${available_cash:.2f}")
+                return 0, price, f"Insufficient funds. Required: ${trade_amount:.2f}, available: ${available_cash:.2f}"
+        else:  # SELL
+            position = self.get_position(symbol)
+            if position:
+                position_qty = getattr(position, 'qty', 0)
+                available_qty = float(position_qty)
+                
+                if trade_amount > available_qty:
+                    logger.warning(f"Insufficient position for {symbol} sell order. Need {trade_amount:.8f} units, have {available_qty:.8f} units")
+                    return 0, price, f"Insufficient position. Required: {trade_amount:.8f} units, available: {available_qty:.8f} units"
+            
+        # Apply minimum order size check
+        if quantity * price < 10.0:  # Example: $10 minimum order
+            logger.warning(f"Order value too small: ${quantity * price:.2f} for {symbol}")
+            return 0, price, f"Order value too small: ${quantity * price:.2f} (minimum $10)"
+        
+        return quantity, price, None
     
     def _get_current_price(self, symbol: str) -> float:
         """
@@ -449,11 +430,16 @@ class AlpacaClient:
         # Log that we received the trade request
         logger.info(f"Received trade signal: {signal.symbol} - {signal.decision.value}")
         
+        # Debug log to see exact value of ALPACA_DEBUG_MODE and paper_trading
+        debug_mode_value = os.getenv("ALPACA_DEBUG_MODE")
+        logger.info(f"DEBUG MODE CHECK: ALPACA_DEBUG_MODE env var value is: '{debug_mode_value}', type: {type(debug_mode_value)}")
+        logger.info(f"DEBUG MODE CHECK: paper_trading value is: {self.paper_trading}, type: {type(self.paper_trading)}")
+        
         # Check if simulation mode is enabled (via ALPACA_DEBUG_MODE=true in .env)
         # Simulation mode provides mock trade execution instead of real API calls
         # When enabled, a banner appears in the UI indicating "SIMULATION MODE"
-        if os.getenv("ALPACA_DEBUG_MODE") == "true":
-            logger.info(f"DEBUG MODE: Simulating successful trade for {signal.symbol} - {signal.decision.value}")
+        if os.getenv("ALPACA_DEBUG_MODE") and os.getenv("ALPACA_DEBUG_MODE").lower() == "true":
+            logger.info(f"DEBUG MODE ACTIVATED BY EXPLICIT FLAG: Simulating successful trade for {signal.symbol} - {signal.decision.value}")
             import uuid
             fake_order_id = f"sim-{uuid.uuid4()}"
             price = self._get_current_price(signal.symbol)
@@ -577,7 +563,8 @@ class AlpacaClient:
                 logger.info(f"Submitting order request: {clean_symbol} {side.value} {quantity} units @ ~${price:.2f}")
                 
                 # DEBUG MODE: Add this for testing without hitting the API
-                if self.paper_trading and os.getenv("ALPACA_DEBUG_MODE") == "true":
+                alpaca_debug_mode = os.getenv("ALPACA_DEBUG_MODE", "false")
+                if self.paper_trading and alpaca_debug_mode.lower() == "true":
                     # Generate a fake order ID
                     import uuid
                     fake_order_id = f"sim-{uuid.uuid4()}"

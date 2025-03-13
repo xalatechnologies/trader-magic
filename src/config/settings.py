@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
@@ -17,6 +17,10 @@ class AlpacaConfig(BaseModel):
     api_key: str = Field(default_factory=lambda: os.getenv("ALPACA_API_KEY", ""))
     api_secret: str = Field(default_factory=lambda: os.getenv("ALPACA_API_SECRET", ""))
     base_url: str = Field(default_factory=lambda: os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets"))
+
+class OpenAIConfig(BaseModel):
+    api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"))
 
 class OllamaConfig(BaseModel):
     model: str = Field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "llama3"))
@@ -49,11 +53,19 @@ class TradingConfig(BaseModel):
             raise ValueError("Fixed trade amount must be at least $1.00")
         return value
 
+class FeatureConfig(BaseModel):
+    news_strategy: bool = Field(default_factory=lambda: os.getenv("USE_NEWS_STRATEGY", "false").lower() == "true")
+    news_buy_threshold: int = Field(default_factory=lambda: int(os.getenv("NEWS_BUY_THRESHOLD", "70")))
+    news_sell_threshold: int = Field(default_factory=lambda: int(os.getenv("NEWS_SELL_THRESHOLD", "30")))
+    auto_start_strategies: bool = Field(default_factory=lambda: os.getenv("AUTO_START_STRATEGIES", "false").lower() == "true")
+
 class AppConfig(BaseModel):
     taapi: TaapiConfig = TaapiConfig()
     alpaca: AlpacaConfig = AlpacaConfig()
+    openai: OpenAIConfig = OpenAIConfig()
     ollama: OllamaConfig = OllamaConfig()
     redis: RedisConfig = RedisConfig()
     trading: TradingConfig = TradingConfig()
+    features: FeatureConfig = FeatureConfig()
 
 config = AppConfig()

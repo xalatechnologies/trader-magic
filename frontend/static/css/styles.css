@@ -840,7 +840,12 @@ footer {
 }
 
 .btn-danger {
-    background-color: #ef4444;
+    background-color: var(--danger);
+    color: white;
+}
+
+.btn-warning {
+    background-color: var(--warning);
     color: white;
 }
 
@@ -1253,4 +1258,447 @@ footer {
         margin: 20px auto;
         padding: 16px;
     }
+}
+
+/* News feed styling */
+.news-feed {
+    background-color: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+}
+
+.news-item {
+    display: flex;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.news-item:last-child {
+    border-bottom: none;
+}
+
+.news-item i {
+    color: var(--primary);
+    font-size: 16px;
+    margin-right: 10px;
+    margin-top: 3px;
+}
+
+.news-details {
+    flex-grow: 1;
+    line-height: 1.4;
+}
+
+.news-headline {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 5px;
+    color: var(--text);
+    text-decoration: none;
+}
+
+a.news-headline:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+.news-meta {
+    font-size: 0.85em;
+    color: var(--text-light);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.news-symbols {
+    font-weight: 500;
+}
+
+.news-source {
+    font-style: italic;
+}
+
+.news-time {
+    margin-left: auto;
+}
+
+/* Custom styles for the strategy modal */
+.strategy-modal-content {
+    max-width: 700px;
+}
+
+/* Strategies section styles */
+.strategies-container {
+    margin-top: 1rem;
+    background-color: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.strategies-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.strategies-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.strategies-status i {
+    font-size: 1rem;
+}
+
+.strategies-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.strategies-list {
+    padding: 1rem;
+}
+
+.strategy-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border-radius: var(--radius);
+    background-color: var(--background);
+    margin-bottom: 0.75rem;
+    transition: all 0.2s ease;
+}
+
+.strategy-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
+.strategy-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+}
+
+.strategy-name {
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--text);
+}
+
+.strategy-description {
+    font-size: 0.9rem;
+    color: var(--text-light);
+}
+
+.strategy-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.strategy-status {
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    border-radius: 1rem;
+    text-align: center;
+    background-color: var(--border);
+    color: var(--text);
+    min-width: 80px;
+}
+
+.strategy-status.enabled {
+    background-color: var(--success);
+    color: white;
+}
+
+.strategy-status.disabled {
+    background-color: var(--danger);
+    color: white;
+}
+
+.strategy-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+}
+
+.strategy-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.strategy-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border);
+    transition: .4s;
+    border-radius: 34px;
+}
+
+.strategy-toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+.strategy-toggle input:checked + .strategy-toggle-slider {
+    background-color: var(--success);
+}
+
+.strategy-toggle input:checked + .strategy-toggle-slider:before {
+    transform: translateX(24px);
+}
+
+.empty-strategies {
+    text-align: center;
+    padding: 2rem 0;
+    color: var(--text-light);
+    font-style: italic;
+}
+
+.strategy-signals {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.strategy-signals-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.signal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.signal-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    background-color: var(--background);
+    transition: all 0.2s ease;
+}
+
+.signal-item:hover {
+    transform: translateX(2px);
+    box-shadow: var(--shadow);
+}
+
+.signal-symbol {
+    font-weight: 600;
+}
+
+.signal-decision {
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.signal-decision.buy {
+    background-color: var(--success);
+    color: white;
+}
+
+.signal-decision.sell {
+    background-color: var(--danger);
+    color: white;
+}
+
+.signal-decision.hold {
+    background-color: var(--warning);
+    color: white;
+}
+
+.signal-time {
+    font-size: 0.875rem;
+    color: var(--text-light);
+}
+
+.signal-strategy {
+    font-size: 0.875rem;
+    color: var(--text-light);
+    font-style: italic;
+}
+
+/* Toast notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    background-color: var(--card-bg);
+    color: var(--text);
+    box-shadow: var(--shadow);
+    z-index: 1000;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.3s, transform 0.3s;
+    max-width: 300px;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast-success {
+    border-left: 4px solid var(--success);
+}
+
+.toast-error {
+    border-left: 4px solid var(--danger);
+}
+
+.toast-warning {
+    border-left: 4px solid var(--warning);
+}
+
+.toast-info {
+    border-left: 4px solid var(--primary);
+}
+
+/* Strategy toggle loading state */
+.strategy-toggle {
+    position: relative;
+}
+
+.strategy-toggle.loading .strategy-toggle-slider {
+    opacity: 0.5;
+}
+
+.strategy-loading-indicator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--primary);
+    display: none;
+    font-size: 14px;
+}
+
+.strategy-toggle.loading .strategy-loading-indicator {
+    display: block;
+}
+
+/* Badge styling for Redis communication indicators */
+.badge {
+    display: inline-block;
+    padding: 0.25em 0.6em;
+    font-size: 75%;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.25rem;
+}
+
+.badge-info {
+    color: #fff;
+    background-color: #17a2b8;
+}
+
+.badge-warning {
+    color: #212529;
+    background-color: #ffc107;
+}
+
+.badge-success {
+    color: #fff;
+    background-color: #28a745;
+}
+
+/* Tooltip styling for strategy manager status */
+[data-toggle="tooltip"] {
+    position: relative;
+    cursor: help;
+    border-bottom: 1px dotted var(--text-light);
+}
+
+[data-toggle="tooltip"]::after {
+    content: attr(title);
+    position: absolute;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 200px;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    background-color: var(--text);
+    color: white;
+    font-size: 12px;
+    text-align: center;
+    white-space: normal;
+    z-index: 10;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s, visibility 0.3s;
+}
+
+[data-toggle="tooltip"]:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Strategy restart button */
+#restart-strategies-btn {
+    margin-left: 8px;
+    display: none;
+}
+
+/* Status indicator for strategy manager states */
+.status-indicator.stalled {
+    color: #f5a700;
+}
+
+.status-indicator.restarting {
+    color: #3498db;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+.btn-small {
+    padding: 2px 6px;
+    font-size: 12px;
+    line-height: 1.5;
 }

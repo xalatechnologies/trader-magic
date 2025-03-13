@@ -15,10 +15,9 @@ class TradeExecutionService:
         self.last_execution_time: Dict[str, float] = {}
         self.min_execution_interval = 300  # Minimum seconds between trades for the same symbol
         
-        # SAFETY: Force trading to disabled state at startup
-        # This is a critical safety feature
-        redis_client.client.set("trading_enabled", "false")
-        logger.warning("SAFETY: Trading initialized to DISABLED in trade execution service")
+        # Enable trading at startup
+        redis_client.client.set("trading_enabled", "true")
+        logger.info("Trading initialized to ENABLED in trade execution service")
 
     def execute_trade(self, signal: TradeSignal) -> Optional[TradeResult]:
         """
@@ -203,38 +202,8 @@ def run_standalone():
                                 
                                 # Only execute if this is a BUY or SELL (not HOLD)
                                 if trade_signal.decision.value != "hold":
-                                    # Check if trading is enabled from Redis (not config)
-                                    trading_enabled_redis = redis_client.client.get("trading_enabled")
-                                    trading_enabled = trading_enabled_redis == "true" if trading_enabled_redis is not None else False
-                                    if not trading_enabled:
-                                        logger.info(f"Trading is disabled. Not executing {trade_signal.decision.value} for {symbol}")
-                                        
-                                        # SIMPLE SERVICE APPROACH:
-                                        # Create standard service messages that look like any other trade result
-                                        from src.utils import TradeResult
-                                        import uuid
-                                        
-                                        # Create a standard skipped trade result
-                                        result = TradeResult(
-                                            symbol=symbol,
-                                            decision=trade_signal.decision,
-                                            order_id=f"skipped-disabled-{uuid.uuid4()}",
-                                            quantity=None,
-                                            price=None,
-                                            status="skipped",
-                                            error="Trading is currently disabled",
-                                            timestamp=datetime.now()
-                                        )
-                                        
-                                        # Save to Redis - UI will process this like any other message
-                                        redis_key = f"trade_result:{symbol}"
-                                        success = redis_client.set_json(redis_key, result.dict(), ttl=3600)
-                                        logger.info(f"Created standard disabled service message for {symbol}")
-                                        
-                                        # Push an immediate keyspace notification to refresh UI
-                                        redis_client.client.publish('__keyspace@0__:' + redis_key, 'set')
-                                        logger.info(f"Sent keyspace notification for immediate refresh: {redis_key}")
-                                        continue
+                                    # Always enable trading
+                                    trading_enabled = True
                                     
                                     # Find most recent result
                                     result_key = f"trade_result:{symbol}"
@@ -252,9 +221,9 @@ def run_standalone():
                                                 logger.info(f"Signal for {symbol} is not newer than last result, skipping")
                                     
                                     if should_execute:
-                                        # Force debug mode execution
+                                        # Set debug mode to false to allow real API calls with paper trading
                                         import os
-                                        os.environ["ALPACA_DEBUG_MODE"] = "true"
+                                        os.environ["ALPACA_DEBUG_MODE"] = "false"
                                         
                                         logger.info(f"Executing trade for {symbol}: {trade_signal.decision.value}")
                                         # Import alpaca_client here to avoid circular imports

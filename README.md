@@ -1,8 +1,90 @@
 ![TraderMagic](docs/img/dashboard-screenshot.png)
 
-# TraderMagic 🧙‍♂️💹
+# Trader Magic
 
-An AI-powered automated trading system built with Python, running entirely on your local machine. The system uses Ollama for AI decision-making, TAAPI.io for technical indicators, and Alpaca for trade execution.
+A microservices-based algorithmic trading platform.
+
+## Services
+
+Trader Magic consists of the following services:
+
+1. **Data Retrieval**: Collects market data from various sources
+2. **AI Decision**: Analyzes market data using machine learning
+3. **Trade Execution**: Executes trades on supported exchanges
+4. **Strategy Manager**: Manages trading strategies and generates trade signals
+5. **Frontend**: Web UI for monitoring and controlling the system
+
+## Architecture
+
+The system uses a microservices architecture with Redis for inter-service communication. Each service runs in its own Docker container and communicates asynchronously.
+
+## Getting Started
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/trader-magic.git
+   cd trader-magic
+   ```
+
+2. Create a `.env` file with your configuration (see `.env.example`)
+
+3. Build and start the services:
+   ```
+   docker-compose build
+   docker-compose up -d
+   ```
+
+4. Visit the dashboard at `http://localhost:9753`
+
+## Development
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Python 3.9+
+- Node.js 14+ (for frontend development)
+
+### Local Development
+
+You can run individual services locally for development:
+
+```
+python -m src.data_retrieval.service  # Run data retrieval service
+python -m src.ai_decision.service      # Run AI decision service
+python -m src.trade_execution.service  # Run trade execution service
+python -m src.strategies.service       # Run strategy manager service
+python frontend/app.py                # Run frontend
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Strategy Manager Not Detected**
+   
+   If you see "Backend strategy manager not detected", make sure the strategy manager service is running. Check with:
+   
+   ```
+   docker ps | grep strategy_manager
+   ```
+   
+   If it's not running, start it with:
+   
+   ```
+   docker-compose up -d strategy_manager
+   ```
+
+2. **Data Retrieval Issues**
+   
+   If data retrieval is failing, check the logs:
+   
+   ```
+   docker logs data_retrieval
+   ```
+
+## License
+
+[MIT License](LICENSE)
 
 ## ✨ Features
 

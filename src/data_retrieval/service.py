@@ -7,6 +7,7 @@ from datetime import datetime
 from src.config import config
 from src.utils import get_logger, redis_client, RSIData, PriceCandle, PriceHistory, MarketStatus
 from src.data_retrieval.taapi_client import taapi_client
+from src.data_retrieval.news_client import news_client
 
 logger = get_logger("data_retrieval_service")
 
@@ -18,6 +19,7 @@ class DataRetrievalService:
         self.price_history_limit = config.taapi.price_history_limit
         self.should_run = True
         self.thread = None
+        self.use_news_strategy = config.features.news_strategy  # Access the attribute directly
 
     def start(self):
         """
@@ -37,6 +39,17 @@ class DataRetrievalService:
             except Exception as e:
                 logger.error(f"Error fetching initial price history for {symbol}: {e}")
 
+        # Start the news client if enabled
+        if self.use_news_strategy:
+            try:
+                logger.info("Initializing news client with symbols: %s", ", ".join(self.symbols))
+                # Configure news client with our symbols
+                news_client.set_subscribed_symbols(self.symbols)
+                # Start the news client
+                news_client.start()
+            except Exception as e:
+                logger.error(f"Error starting news client: {e}")
+
         self.should_run = True
         self.thread = threading.Thread(target=self._run_service)
         self.thread.daemon = True
@@ -48,6 +61,15 @@ class DataRetrievalService:
         Stop the data retrieval service
         """
         self.should_run = False
+        
+        # Stop the news client if enabled
+        if self.use_news_strategy:
+            try:
+                logger.info("Stopping news client")
+                news_client.stop()
+            except Exception as e:
+                logger.error(f"Error stopping news client: {e}")
+
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=10)
             logger.info("Data retrieval service stopped")

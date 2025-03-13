@@ -111,6 +111,11 @@
                     <button id="refresh-btn" class="btn">
                         <i class="fas fa-sync-alt"></i> Refresh
                     </button>
+                    
+                    <!-- Add new API refresh button -->
+                    <button id="refresh-api-btn" class="btn btn-info" style="background-color: #3b82f6; color: white; margin-left: 5px;">
+                        <i class="fas fa-key"></i> Refresh API
+                    </button>
                 </div>
             </div>
             
@@ -150,6 +155,14 @@
                     <div class="symbol-header">
                         <h3>{{ symbol }}</h3>
                         <span class="last-updated" id="updated-{{ symbol|replace('/', '-') }}">Waiting for data...</span>
+                        <button 
+                            class="refresh-card-btn" 
+                            style="font-size: 0.7rem; padding: 2px 5px; margin-left: 5px; display: none;"
+                            onclick="refreshCard('{{ symbol }}')">🔄</button>
+                        <button 
+                            class="debug-info-btn" 
+                            style="font-size: 0.7rem; padding: 2px 5px; margin-left: 5px; display: none; background-color: #eab308; color: white;"
+                            onclick="showDebugInfo('{{ symbol }}')">📊</button>
                     </div>
                     <div class="metrics">
                         <div class="metric">
@@ -202,6 +215,38 @@
                 <h3>Recent Activity</h3>
                 <div class="activity-log" id="activity-log">
                     <div class="empty-log">No recent activity</div>
+                </div>
+            </div>
+            
+            <div class="history-section">
+                <h3>Recent News</h3>
+                <div class="news-feed" id="news-feed">
+                    <div class="empty-log">No recent news</div>
+                </div>
+            </div>
+            
+            <div class="history-section">
+                <h3>Trading Strategies</h3>
+                <div class="strategies-container" id="strategies-container">
+                    <div class="strategies-header">
+                        <div class="strategies-status">
+                            <span id="strategies-status-text">Loading strategies...</span>
+                        </div>
+                        <div class="strategies-actions">
+                            <button id="start-strategies-btn" class="btn btn-success">
+                                <i class="fas fa-play"></i> Start Strategy Manager
+                            </button>
+                            <button id="stop-strategies-btn" class="btn btn-danger" style="display: none;">
+                                <i class="fas fa-stop"></i> Stop Strategy Manager
+                            </button>
+                            <button id="restart-strategies-btn" class="btn btn-warning" style="display: none;">
+                                <i class="fas fa-sync"></i> Restart Strategy Manager
+                            </button>
+                        </div>
+                    </div>
+                    <div class="strategies-list" id="strategies-list">
+                        <div class="empty-strategies">No strategies available</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -425,5 +470,55 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/strategies.js') }}"></script>
+    <script>
+    // Debug utilities for card and account refresh
+    function showDebugInfo(symbol) {
+        console.log(`Showing debug info for ${symbol}`);
+        
+        // Check Redis data directly for this symbol
+        fetch(`/api/redis/trade_result:${symbol}`)
+            .then(response => response.json())
+            .then(data => {
+                console.log(`Redis data for ${symbol}:`, data);
+                alert(`Redis data for ${symbol}:\n${JSON.stringify(data.value, null, 2)}`);
+                
+                // Force a card refresh
+                refreshCard(symbol);
+                
+                // Force an account update
+                fetch('/api/force_account_update')
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Force account update result:', data);
+                        if (data.success) {
+                            alert(`Account data update triggered successfully.\nCheck the browser console for details.`);
+                        } else {
+                            alert(`Error updating account data: ${data.error}`);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error forcing account update:', error);
+                        alert(`Error forcing account update: ${error.message}`);
+                    });
+            })
+            .catch(error => {
+                console.error(`Error fetching Redis data for ${symbol}:`, error);
+                alert(`Error fetching Redis data: ${error.message}`);
+            });
+    }
+
+    // Make the debug buttons visible when Ctrl+Shift+D is pressed
+    document.addEventListener('keydown', function(event) {
+        // Ctrl+Shift+D to toggle debug mode (consistent with existing refresh buttons)
+        if (event.ctrlKey && event.shiftKey && event.key === 'D') {
+            const debugBtns = document.querySelectorAll('.debug-info-btn');
+            debugBtns.forEach(btn => {
+                btn.style.display = btn.style.display === 'none' ? 'inline-block' : 'none';
+            });
+            console.log('Debug info buttons toggled');
+        }
+    });
+    </script>
 </body>
 </html>

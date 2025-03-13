@@ -19,21 +19,116 @@ app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'dev_key')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Redis connection
-redis_host = os.getenv('REDIS_HOST', 'redis')
+redis_host = os.getenv('REDIS_HOST', 'localhost')  # Default to localhost instead of 'redis'
 redis_port = int(os.getenv('REDIS_PORT', 6379))
 redis_db = int(os.getenv('REDIS_DB', 0))
-redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, decode_responses=True)
 
-# Test if Redis is working correctly
-print("Testing Redis connection...")
-test_key = redis_client.get("test_key")
-print(f"Test key from Redis: {test_key}")
-if test_key:
-    try:
-        test_json = json.loads(test_key)
-        print(f"Test JSON parse successful: {test_json}")
-    except Exception as e:
-        print(f"Test JSON parse failed: {e}")
+# Initialize Redis client with error handling
+redis_client = None
+try:
+    redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, decode_responses=True)
+    # Test if Redis is working correctly
+    print(f"Testing Redis connection to {redis_host}:{redis_port}...")
+    test_key = redis_client.get("test_key")
+    print(f"Test key from Redis: {test_key}")
+    if test_key:
+        try:
+            test_json = json.loads(test_key)
+            print(f"Test JSON parse successful: {test_json}")
+        except Exception as e:
+            print(f"Test JSON parse failed: {e}")
+except Exception as e:
+    print(f"Error connecting to Redis at {redis_host}:{redis_port}: {e}")
+    print("Using mock Redis functionality for development")
+    # Create a simple mock for Redis that supports basic operations
+    # This allows the application to run even without Redis
+    class MockRedis:
+        def __init__(self):
+            self.data = {}
+            self.channels = {}
+            print("Mock Redis initialized")
+        
+        def get(self, key):
+            return self.data.get(key)
+        
+        def get_json(self, key):
+            """Get a JSON value from Redis and deserialize it"""
+            data = self.get(key)
+            if data:
+                try:
+                    return json.loads(data)
+                except json.JSONDecodeError:
+                    print(f"Warning: Failed to parse JSON for key {key}")
+            return None
+        
+        def set(self, key, value):
+            self.data[key] = value
+            return True
+        
+        def delete(self, *keys):
+            for key in keys:
+                if key in self.data:
+                    del self.data[key]
+            return len(keys)
+        
+        def keys(self, pattern="*"):
+            # Simple pattern matching for keys
+            if pattern == "*":
+                return list(self.data.keys())
+            
+            import re
+            pattern = pattern.replace("*", ".*")
+            regex = re.compile(pattern)
+            return [k for k in self.data.keys() if regex.match(k)]
+        
+        def publish(self, channel, message):
+            print(f"MOCK REDIS - Would publish to {channel}: {message}")
+            if channel not in self.channels:
+                self.channels[channel] = []
+            self.channels[channel].append(message)
+            return 0
+        
+        def pubsub(self):
+            # Simple mock of the pubsub interface
+            class MockPubSub:
+                def __init__(self, parent):
+                    self.parent = parent
+                    self.subscribed_channels = []
+                
+                def subscribe(self, *channels):
+                    for channel in channels:
+                        if channel not in self.subscribed_channels:
+                            self.subscribed_channels.append(channel)
+                    print(f"MOCK REDIS - Subscribed to channels: {self.subscribed_channels}")
+                
+                def psubscribe(self, *patterns):
+                    print(f"MOCK REDIS - Pattern subscribed to: {patterns}")
+                
+                def listen(self):
+                    # This would normally block and yield messages
+                    # For mock, just yield a fake message and then block forever
+                    yield {"type": "subscribe", "channel": "mock_channel", "data": "mock_subscription_confirmation"}
+                    while True:
+                        import time
+                        time.sleep(10)  # Sleep to avoid CPU spin
+            
+            return MockPubSub(self)
+    
+    redis_client = MockRedis()
+
+# Check if the strategy manager is running
+strategy_manager_running = False
+try:
+    running_status = redis_client.get('strategy_manager:running')
+    if running_status:
+        strategy_manager_running = running_status.lower() == 'true'
+        if strategy_manager_running:
+            interval = redis_client.get('strategy_manager:interval')
+            print(f"Strategy manager appears to be running with interval: {interval}")
+        else:
+            print("Strategy manager appears to be stopped")
+except Exception as e:
+    print(f"Error checking strategy manager status: {e}")
 
 # Add Redis manual key lookup
 def scan_keys(pattern=None):
@@ -75,7 +170,7 @@ redis_client.get_pubsub = get_pubsub
 
 # Frontend configuration
 frontend_host = os.getenv('FRONTEND_HOST', '0.0.0.0')
-frontend_port = int(os.getenv('FRONTEND_PORT', 9753))
+frontend_port = int(os.getenv('FRONTEND_PORT', 9754))
 
 def get_all_trading_data():
     """Get all trading data from Redis"""
@@ -99,287 +194,177 @@ def get_all_trading_data():
             print(f"Error getting Ollama status from Redis: {e}")
             print(traceback.format_exc())
         
-        # Get trading enabled status from Redis - default to false
-        trading_enabled_redis = redis_client.get("trading_enabled") 
-        trading_enabled = trading_enabled_redis == "true" if trading_enabled_redis is not None else False
-        
-        # Add system status data
-        data['_system'] = {
-            'ollama_status': ollama_status,
-            'trading_enabled': trading_enabled
-        }
-        
+        # Get all trading symbols data
         for symbol in symbols:
-            symbol_data = {
-                'symbol': symbol,
-                'rsi': None,
-                'signal': None,
-                'result': None,
-                'timestamp': None,
-                'price': None,
-                'price_history': None,
-                'alpaca_valid': True  # Default to True, will be set to False if invalid
-            }
+            symbol_data = {}
             
-            # Simple check for known unsupported symbols
-            # This is a simplified approach since we can't import the Alpaca client directly
-            if symbol == 'QTUM/USDT':
-                # QTUM/USDT is not supported by Alpaca
-                symbol_data['alpaca_valid'] = False
-                print(f"Symbol {symbol} is not valid for Alpaca")
-            
-            # Use get_json for all Redis data to match data_retrieval.service
-            
-            # Get RSI data
-            rsi_json = redis_client.get_json(f"rsi:{symbol}")
-            if rsi_json:
-                symbol_data['rsi'] = rsi_json
-            
-            # Get signal data
-            signal_json = redis_client.get_json(f"signal:{symbol}")
-            if signal_json:
-                symbol_data['signal'] = signal_json
-            
-            # Get trade result data
-            result_json = redis_client.get_json(f"trade_result:{symbol}")
-            if result_json:
-                symbol_data['result'] = result_json
+            # RSI data
+            rsi_key = f"rsi:{symbol}"
+            rsi_data = redis_client.get_json(rsi_key)
+            if rsi_data:
+                symbol_data['rsi'] = rsi_data
                 
-            # Get current price data
-            price_json = redis_client.get_json(f"price:{symbol}")
-            if price_json:
-                symbol_data['price'] = price_json
+            # Price data 
+            price_key = f"price:{symbol}"
+            price_data = redis_client.get_json(price_key)
+            if price_data:
+                symbol_data['price'] = price_data
                 
-            # Check if Redis has the price history key
-            redis_key = f"price_history:{symbol}"
-            
-            # Get all keys to debug (just once)
-            if symbol == symbols[0]:
-                all_keys = redis_client.scan_iter("*")
-                print(f"All Redis keys: {all_keys}")
+            # Trade signal
+            signal_key = f"signal:{symbol}"
+            signal_data = redis_client.get_json(signal_key)
+            if signal_data:
+                symbol_data['signal'] = signal_data
                 
-                # Specifically check price history keys
-                price_history_keys = redis_client.scan_iter("price_history:*")
-                if price_history_keys:
-                    print(f"Found price history keys: {price_history_keys}")
-                else:
-                    print("No price history keys found!")
-                
-            # Try to directly get the key data 
-            price_history_data = redis_client.get(redis_key)
-            if price_history_data:
-                print(f"Raw price history data found for {symbol} (length: {len(price_history_data)})")
-                
-                # Create fresh instance for each symbol
-                price_history_json = {}
-                
-                try:
-                    price_history_json = json.loads(price_history_data)
-                    print(f"Successfully parsed price history JSON for {symbol}")
-                    
-                    if 'candles' in price_history_json:
-                        print(f"Found {len(price_history_json['candles'])} candles in price history for {symbol}")
-                        
-                        # Debug the first candle
-                        if price_history_json['candles']:
-                            print(f"Sample candle for {symbol}: {price_history_json['candles'][0]}")
-                        
-                        # Create formatted data for the chart
-                        formatted_history = {
-                            'timestamps': [],
-                            'prices': [],
-                            'market_statuses': []
-                        }
-                        
-                        try:
-                            # Sort candles by timestamp (oldest first)
-                            candles = sorted(price_history_json['candles'], 
-                                            key=lambda x: x['timestamp'] if isinstance(x['timestamp'], str) 
-                                            else x['timestamp'].get('isoformat', ''))
-                            
-                            for candle in candles:
-                                # Handle timestamp
-                                timestamp = candle['timestamp']
-                                if isinstance(timestamp, dict) and 'isoformat' in timestamp:
-                                    # Handle python-serialized datetime
-                                    timestamp = timestamp['isoformat']
-                                
-                                # Add data points
-                                formatted_history['timestamps'].append(timestamp)
-                                formatted_history['prices'].append(float(candle['close']))
-                                
-                                # Add market status
-                                market_status = candle.get('market_status', 'open')
-                                if isinstance(market_status, str):
-                                    formatted_market_status = market_status
-                                elif isinstance(market_status, dict) and 'value' in market_status:
-                                    formatted_market_status = market_status['value']
-                                else:
-                                    formatted_market_status = 'open'
-                                    
-                                formatted_history['market_statuses'].append(formatted_market_status)
-                                
-                            print(f"!!! PRICE HISTORY DATA FOR {symbol}: {len(formatted_history['prices'])} data points !!!")
-                            
-                            # Add the formatted data to symbol_data
-                            symbol_data['price_history'] = formatted_history
-                        except Exception as e:
-                            print(f"ERROR processing candles for {symbol}: {e}")
-                            import traceback
-                            print(traceback.format_exc())
-                            # Set empty price history if processing failed
-                            symbol_data['price_history'] = {
-                                'timestamps': [],
-                                'prices': [],
-                                'market_statuses': []
-                            }
-                    else:
-                        print(f"ERROR: No 'candles' key found in price history data for {symbol}")
-                        # Set empty price history if no candles
-                        symbol_data['price_history'] = {
-                            'timestamps': [],
-                            'prices': [],
-                            'market_statuses': []
-                        }
-                except Exception as e:
-                    print(f"Error parsing price history JSON: {e}")
-                    # Set empty price history if JSON parsing failed
-                    symbol_data['price_history'] = {
-                        'timestamps': [],
-                        'prices': [],
-                        'market_statuses': []
-                    }
+            # Trading result
+            result_key = f"trade_result:{symbol}"
+            result_data = redis_client.get_json(result_key)
+            if result_data:
+                symbol_data['result'] = result_data
+                print(f"Found trade result for {symbol}: {result_data['status']}")
             else:
-                print(f"No raw price history data found for {symbol}")
-                # Set empty price history if none found
-                symbol_data['price_history'] = {
-                    'timestamps': [],
-                    'prices': [],
-                    'market_statuses': []
-                }
+                print(f"No trade result found for {symbol}")
+                
+            # Price history data for charts
+            history_key = f"price_history:{symbol}"
+            history_data = redis_client.get_json(history_key)
+            if history_data:
+                # Count how many candles we have for debugging
+                candle_count = len(history_data.get('candles', []))
+                symbol_data['price_history'] = history_data
+                print(f"Retrieved {candle_count} candles for {symbol}")
             
-            # Get latest timestamp from any of the data sources
-            timestamps = []
-            for src in [symbol_data['rsi'], symbol_data['signal'], symbol_data['result'], symbol_data['price']]:
-                if src and 'timestamp' in src:
-                    # Convert all timestamps to strings to avoid comparison issues
-                    timestamps.append(str(src['timestamp']))
-            
-            if timestamps:
-                symbol_data['timestamp'] = max(timestamps)
-            
+            # Check for invalid Alpaca symbol
+            invalid_key = f"alpaca:invalid:{symbol}"
+            invalid_flag = redis_client.get(invalid_key)
+            if invalid_flag:
+                symbol_data['invalid_alpaca_symbol'] = True
+                
+            # Position data
+            position_key = f"position:{symbol}"
+            position_data = redis_client.get_json(position_key)
+            if position_data:
+                symbol_data['position'] = position_data
+                    
             data[symbol] = symbol_data
+            
+        # Account data
+        account_key = "account:data"
+        account_data = redis_client.get_json(account_key)
+        if account_data:
+            data['account'] = account_data
+            
+        # Trading enabled status
+        trading_enabled = redis_client.get("trading_enabled")
+        data['trading_enabled'] = trading_enabled == "true" if trading_enabled is not None else False
         
+        # Recent market orders
+        orders_key = "recent_orders"
+        orders_data = redis_client.get_json(orders_key)
+        if orders_data:
+            data['recent_orders'] = orders_data
+            
+        # Get recent news items
+        news_keys = redis_client.keys("news:*")
+        if news_keys:
+            # Sort by timestamp (most recent first)
+            news_items = []
+            for key in news_keys:
+                news_data = redis_client.get_json(key)
+                if news_data:
+                    news_items.append(news_data)
+            
+            # Sort by timestamp (most recent first) if news items have timestamps
+            if news_items:
+                try:
+                    news_items.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                except Exception as e:
+                    print(f"Error sorting news items: {e}")
+                
+                # Limit to 10 most recent items
+                data['recent_news'] = news_items[:10]
+                
+        # Add ollama status if available
+        if ollama_status:
+            data['ollama_status'] = ollama_status
+            
         return data
     except Exception as e:
-        print(f"Error in api_data: {e}")
-        return {
-            '_system': {
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
-            }
-        }
+        print(f"Error getting trading data: {e}")
+        print(traceback.format_exc())
+        return {}
+
+# List to track clients registered for transaction updates
+transaction_update_clients = []
+
+@socketio.on('register_for_transaction_updates')
+def handle_transaction_registration():
+    """Register client for transaction update events"""
+    print(f"Client {request.sid} registered for transaction updates")
+    if request.sid not in transaction_update_clients:
+        transaction_update_clients.append(request.sid)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnect and clean up registrations"""
+    if request.sid in transaction_update_clients:
+        transaction_update_clients.remove(request.sid)
+    print(f"Client {request.sid} disconnected, active transaction listeners: {len(transaction_update_clients)}")
 
 def redis_listener():
-    """Background thread to monitor Redis and send updates via Socket.IO"""
-    pubsub = redis_client.pubsub()
-    
-    # Subscribe to all Redis keyspace notifications
-    pubsub.psubscribe('__keyspace@0__:*')
-    
-    # Also subscribe to direct trading notifications channel 
-    pubsub.subscribe('trade_notifications')
-    print("Subscribed to 'trade_notifications' channel for direct updates")
-    
-    # Track last periodic update time
-    last_periodic_update = float(time.time())
-    periodic_update_interval = float(15)  # Send periodic updates every 15 seconds
-    
-    # Throttle updates from keyspace events
-    last_keyspace_update = float(time.time())
-    keyspace_update_interval = float(2)  # Minimum seconds between keyspace-triggered updates
-    
-    # Track relevant keys for trading data 
-    # IMPORTANT: Include trading_enabled key to ensure UI gets notified of state changes
-    relevant_prefixes = ['rsi:', 'signal:', 'trade_result:', 'ollama:', 'trading_enabled']
-    
-    while True:
-        try:
-            # Get messages with a timeout to avoid busy-waiting
-            message = pubsub.get_message(timeout=1.0)
-            
-            current_time = float(time.time())
-            
-            # Handle direct trade notifications - IMMEDIATELY forward with no throttling
-            if message and message['type'] == 'message' and message['channel'] == 'trade_notifications':
-                print(f"⚠️ Direct trading notification received: {message['data']}")
-                try:
-                    # This is a direct notification that needs immediate forwarding
-                    data = get_all_trading_data()  # Get complete dashboard data
-                    socketio.emit('data_update', data)
-                    print("✅ Sent immediate dashboard update due to trading notification")
-                except Exception as e:
-                    print(f"Error handling trade notification: {e}")
-                    
-            # Handle keyspace notifications (with throttling)
-            elif message and message['type'] == 'pmessage':
-                channel = message['channel']
-                # Extract the key from the keyspace notification channel
-                # Format is "__keyspace@0__:actual:key"
-                key = channel.split(':', 1)[1] if ':' in channel else ''
-                
-                # Only react to relevant keys and respect rate limiting
-                is_relevant = any(key.startswith(prefix) for prefix in relevant_prefixes)
-                try:
-                    # Debug keyspace update comparison
-                    print(f"DEBUG KEYSPACE: current_time: {current_time} ({type(current_time).__name__}), "
-                          f"last_keyspace_update: {last_keyspace_update} ({type(last_keyspace_update).__name__}), "
-                          f"keyspace_update_interval: {keyspace_update_interval} ({type(keyspace_update_interval).__name__})")
-                    
-                    # Convert all to float explicitly
-                    current_time_float = float(current_time)
-                    last_keyspace_float = float(last_keyspace_update)
-                    keyspace_interval_float = float(keyspace_update_interval)
-                    
-                    time_diff = current_time_float - last_keyspace_float
-                    update_needed = is_relevant and time_diff > keyspace_interval_float
-                    
-                    if update_needed:
-                        print(f"Sending update to clients for key: {key}")
-                        socketio.emit('data_update', get_all_trading_data())
-                        last_keyspace_update = current_time_float
-                except Exception as type_error:
-                    print(f"Error in keyspace update comparison: {type_error}")
-                    # Reset the last update time to avoid continuous errors
-                    last_keyspace_update = float(time.time())
-            
-            # Periodically send updates even without Redis events
+    """Listen for Redis keyspace notifications and emit events to clients"""
+    try:
+        # Create a separate Redis connection for pub/sub
+        pubsub = redis_client.get_pubsub()
+        
+        # Subscribe to keyspace notifications for trade results
+        pubsub.psubscribe('__keyspace@0__:trade_result:*')
+        
+        print("Redis listener started, waiting for trade result updates...")
+        
+        for message in pubsub.listen():
             try:
-                # Debug the types
-                print(f"DEBUG: current_time: {current_time} ({type(current_time).__name__}), "
-                      f"last_periodic_update: {last_periodic_update} ({type(last_periodic_update).__name__}), "
-                      f"periodic_update_interval: {periodic_update_interval} ({type(periodic_update_interval).__name__})")
-                
-                # Convert all to float to ensure they're the same type
-                current_time_float = float(current_time)
-                last_update_float = float(last_periodic_update)
-                interval_float = float(periodic_update_interval)
-                
-                if current_time_float - last_update_float > interval_float:
-                    print(f"Sending periodic update to clients (every {interval_float} seconds)")
-                    socketio.emit('data_update', get_all_trading_data())
-                    last_periodic_update = current_time_float
-            except Exception as debug_error:
-                print(f"Error in periodic update: {debug_error}")
-                # Reset the last update time to avoid continuous errors
-                last_periodic_update = float(time.time())
-                
-            # Reduced sleep time since we're already using timeouts in get_message
-            time.sleep(0.05)
-            
-        except Exception as e:
-            print(f"Error in Redis listener: {e}")
-            time.sleep(1)
+                if message['type'] == 'pmessage':
+                    key = message['channel'].decode('utf-8').replace('__keyspace@0__:', '')
+                    operation = message['data'].decode('utf-8')
+                    
+                    # Only process SET operations for trade results
+                    if key.startswith('trade_result:') and operation == 'set':
+                        symbol = key.replace('trade_result:', '')
+                        print(f"Trade result updated for {symbol}, notifying clients")
+                        
+                        # Get the trade result to check status
+                        result_data = redis_client.get(key)
+                        if result_data:
+                            try:
+                                result = json.loads(result_data)
+                                # Only notify for executed trades
+                                if result['status'] == 'executed':
+                                    # Emit to all registered clients
+                                    if transaction_update_clients:
+                                        socketio.emit('transaction_complete', {
+                                            'symbol': symbol,
+                                            'timestamp': datetime.now().isoformat(),
+                                            'status': result['status'],
+                                            'decision': result.get('decision')
+                                        })
+                                        print(f"Notified {len(transaction_update_clients)} clients about {symbol} transaction")
+                                        
+                                        # Also emit account update notification
+                                        socketio.emit('account_update_needed')
+                                        print("Emitted account update notification")
+                            except Exception as e:
+                                print(f"Error processing trade result for {symbol}: {e}")
+            except Exception as e:
+                print(f"Error in Redis message handling: {e}")
+                print(traceback.format_exc())
+    except Exception as e:
+        print(f"Error in Redis listener: {e}")
+        print(traceback.format_exc())
+
+# Start Redis listener in a separate thread
+redis_listener_thread = threading.Thread(target=redis_listener, daemon=True)
+redis_listener_thread.start()
 
 @app.route('/')
 def index():
@@ -662,7 +647,7 @@ def toggle_trading():
         # When trading state changes, create appropriate trade result messages
         try:
             # 1. Publish standard message for services
-            redis_client.client.publish('settings:update', json.dumps({
+            redis_client.publish('settings:update', json.dumps({
                 'trading_enabled': enabled
             }))
             print(f"Published trading status update to Redis: {'enabled' if enabled else 'disabled'}")
@@ -674,7 +659,7 @@ def toggle_trading():
                 for symbol in symbols:
                     try:
                         # Get current signal for this symbol to include its decision
-                        signal_data = redis_client.client.get(f"signal:{symbol}")
+                        signal_data = redis_client.get(f"signal:{symbol}")
                         if signal_data:
                             # Only create disabled messages for non-HOLD signals
                             signal_json = json.loads(signal_data)
@@ -1003,12 +988,809 @@ def handle_connect(sid=None):
     # Send initial data to the client
     socketio.emit('data_update', get_all_trading_data())
 
-if __name__ == '__main__':
-    # Start Redis listener in a background thread
-    threading.Thread(target=redis_listener, daemon=True).start()
+@app.route('/api/strategies')
+def get_strategies():
+    """API endpoint to get all trading strategies"""
+    try:
+        # Try to directly access the strategy manager
+        try:
+            from src.strategies.strategy_manager import strategy_manager
+            
+            # Get all active strategies
+            strategies = strategy_manager.get_active_strategies()
+            
+            return jsonify({
+                'strategies': strategies,
+                'timestamp': datetime.now().isoformat()
+            })
+        except ImportError as e:
+            # If direct import fails, try to get strategy information from Redis
+            print(f"Direct import of strategy manager failed: {e}")
+            strategies = []
+            strategy_keys = redis_client.keys("strategy:*:info")
+            
+            for key in strategy_keys:
+                strategy_data = redis_client.get_json(key)
+                if strategy_data:
+                    # Check if strategy is enabled
+                    strategy_name = key.split(":")[1]
+                    enabled_key = f"strategy:{strategy_name}:enabled"
+                    enabled = redis_client.get(enabled_key)
+                    enabled = enabled == "true" if enabled else False
+                    
+                    # Add enabled status to strategy data
+                    strategy_data["enabled"] = enabled
+                    strategies.append(strategy_data)
+            
+            if strategies:
+                return jsonify({
+                    'strategies': strategies,
+                    'timestamp': datetime.now().isoformat(),
+                    'container_mode': True,
+                    'note': "Using Redis for communication between containers"
+                })
+            else:
+                # Return a more user-friendly message for container deployments
+                return jsonify({
+                    'strategies': [],
+                    'timestamp': datetime.now().isoformat(),
+                    'container_mode': True,
+                    'note': "Using Redis for container communication",
+                    'status': "waiting_for_backend",
+                    'message': "Backend strategy manager not detected yet. If this persists, please check if the backend container is running."
+                }), 200  # Return 200 instead of 404 since this is an expected scenario
+    except Exception as e:
+        print(f"Error in strategies endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/strategies/<strategy_name>', methods=['POST'])
+def update_strategy(strategy_name):
+    """API endpoint to enable/disable a trading strategy"""
+    try:
+        # Get the request data
+        data = request.json
+        enabled = data.get('enabled', True)
+        
+        # Try to directly access the strategy manager
+        try:
+            from src.strategies.strategy_manager import strategy_manager
+            
+            # Enable or disable the strategy
+            success = strategy_manager.enable_strategy(strategy_name, enabled)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'strategy': strategy_name,
+                    'enabled': enabled,
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f"Strategy {strategy_name} not found",
+                    'timestamp': datetime.now().isoformat()
+                }), 404
+        except ImportError as e:
+            # If direct import fails, try to update the strategy in Redis
+            print(f"Direct import of strategy manager failed: {e}")
+            
+            # Check if the strategy exists in Redis
+            strategy_key = f"strategy:{strategy_name}:info"
+            strategy_data = redis_client.get_json(strategy_key)
+            
+            if not strategy_data:
+                return jsonify({
+                    'success': False,
+                    'error': f"Strategy {strategy_name} not found in Redis",
+                    'timestamp': datetime.now().isoformat()
+                }), 404
+                
+            # Update the enabled status in Redis
+            enabled_key = f"strategy:{strategy_name}:enabled"
+            redis_client.set(enabled_key, str(enabled).lower())
+            
+            # Publish a message to notify the backend
+            redis_client.publish('strategy_updates', 
+                json.dumps({
+                    'action': 'enable_strategy',
+                    'strategy': strategy_name,
+                    'enabled': enabled
+                })
+            )
+            
+            return jsonify({
+                'success': True,
+                'strategy': strategy_name,
+                'enabled': enabled,
+                'timestamp': datetime.now().isoformat(),
+                'note': "Updated via Redis (strategy manager not directly accessible)"
+            })
+    except Exception as e:
+        print(f"Error in strategy update endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/signals')
+def get_signals():
+    """API endpoint to get all trading signals"""
+    try:
+        # Get all signal keys from Redis
+        signal_keys = redis_client.keys("signal:*")
+        
+        # Get signal data if any exists
+        signals = []
+        for key in signal_keys:
+            signal_data = redis_client.get_json(key)
+            if signal_data:
+                signals.append(signal_data)
+                
+        return jsonify({
+            'signals': signals,
+            'count': len(signals),
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error in signals endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/start_strategy_manager', methods=['POST'])
+def start_strategy_manager():
+    """API endpoint to start the strategy manager polling"""
+    try:
+        # Get the request data
+        data = request.json
+        interval = int(data.get('interval', 60))
+        
+        # Try to directly access the strategy manager
+        try:
+            from src.strategies.strategy_manager import strategy_manager
+            
+            # Start polling
+            strategy_manager.start_polling(interval=interval)
+            
+            return jsonify({
+                'success': True,
+                'message': f"Strategy manager started with {interval}s polling interval",
+                'timestamp': datetime.now().isoformat()
+            })
+        except ImportError as e:
+            # If direct import fails, use Redis to notify the backend
+            print(f"Direct import of strategy manager failed: {e}")
+            
+            try:
+                # Publish a message to notify the backend to start the strategy manager
+                redis_client.publish('strategy_updates', 
+                    json.dumps({
+                        'action': 'start_polling',
+                        'interval': interval
+                    })
+                )
+                
+                # Store the running state in Redis
+                redis_client.set('strategy_manager:running', 'true')
+                redis_client.set('strategy_manager:interval', str(interval))
+                
+                return jsonify({
+                    'success': True,
+                    'message': f"Start command sent via Redis. Strategy manager should start with {interval}s polling interval",
+                    'timestamp': datetime.now().isoformat(),
+                    'note': "Started via Redis (strategy manager not directly accessible)"
+                })
+            except Exception as redis_error:
+                print(f"Redis error in start strategy manager: {redis_error}")
+                return jsonify({
+                    'success': False,
+                    'error': f"Redis error: {str(redis_error)}. Check if Redis is properly configured and running.",
+                    'timestamp': datetime.now().isoformat()
+                }), 500
+    except Exception as e:
+        print(f"Error in start strategy manager endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/stop_strategy_manager', methods=['POST'])
+def stop_strategy_manager():
+    """API endpoint to stop the strategy manager polling"""
+    try:
+        # Try to directly access the strategy manager
+        try:
+            from src.strategies.strategy_manager import strategy_manager
+            
+            # Stop polling
+            strategy_manager.stop_polling()
+            
+            return jsonify({
+                'success': True,
+                'message': "Strategy manager stopped",
+                'timestamp': datetime.now().isoformat()
+            })
+        except ImportError as e:
+            # If direct import fails, use Redis to notify the backend
+            print(f"Direct import of strategy manager failed: {e}")
+            
+            try:
+                # Publish a message to notify the backend to stop the strategy manager
+                redis_client.publish('strategy_updates', 
+                    json.dumps({
+                        'action': 'stop_polling'
+                    })
+                )
+                
+                # Store the running state in Redis
+                redis_client.set('strategy_manager:running', 'false')
+                
+                return jsonify({
+                    'success': True,
+                    'message': "Stop command sent via Redis. Strategy manager should stop shortly",
+                    'timestamp': datetime.now().isoformat(),
+                    'note': "Stopped via Redis (strategy manager not directly accessible)"
+                })
+            except Exception as redis_error:
+                print(f"Redis error in stop strategy manager: {redis_error}")
+                return jsonify({
+                    'success': False,
+                    'error': f"Redis error: {str(redis_error)}. Check if Redis is properly configured and running.",
+                    'timestamp': datetime.now().isoformat()
+                }), 500
+    except Exception as e:
+        print(f"Error in stop strategy manager endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/news/status')
+def news_status():
+    """API endpoint to check news integration status"""
+    try:
+        # Check if news strategy is enabled
+        use_news_strategy = os.getenv('USE_NEWS_STRATEGY', 'false').lower() == 'true'
+        
+        # Get all news keys from Redis
+        news_keys = redis_client.keys("news:*")
+        news_count = len(news_keys)
+        
+        # Get news items if any exist
+        news_items = []
+        for key in news_keys[:10]:  # Limit to 10 most recent for the status check
+            news_data = redis_client.get_json(key)
+            if news_data:
+                news_items.append(news_data)
+                
+        # Get symbols we're tracking
+        symbols = os.getenv('SYMBOLS', 'BTC/USD').split(',')
+        
+        return jsonify({
+            'news_strategy_enabled': use_news_strategy,
+            'news_items_count': news_count,
+            'news_items_sample': news_items,
+            'tracked_symbols': symbols,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error in news status endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/strategy_manager/health')
+def strategy_manager_health():
+    """API endpoint to check the health of the strategy manager using Redis"""
+    try:
+        try:
+            # Check if the strategy manager is running through Redis
+            running_status = redis_client.get('strategy_manager:running')
+            
+            # Look for strategy info keys in Redis
+            strategy_keys = redis_client.keys("strategy:*:info")
+            strategy_names = [key.split(':')[1] for key in strategy_keys]
+            
+            # Check if there are any signals in Redis (indication of a working system)
+            signal_keys = redis_client.keys("signal:*")
+            
+            # Determine health status
+            if running_status and running_status.lower() == 'true' and strategy_keys:
+                status = "healthy"
+                message = "Strategy manager running and communicating via Redis"
+            elif strategy_keys:
+                status = "limited"
+                message = "Strategy registry detected but manager may not be running"
+            elif signal_keys:
+                status = "limited"
+                message = "Trading signals detected but no strategy registry found"
+            else:
+                status = "not_detected"
+                message = "Backend strategy manager not detected in Redis"
+        except Exception as redis_error:
+            status = "error"
+            message = f"Redis error checking strategy manager: {str(redis_error)}"
+            print(f"Redis error in health check: {redis_error}")
+            strategy_names = []
+            signal_keys = []
     
-    # Start Flask app
-    socketio.run(app, host=frontend_host, port=frontend_port, debug=False, allow_unsafe_werkzeug=True)
+        return jsonify({
+            'status': status,
+            'message': message,
+            'strategy_manager_running': running_status == 'true' if running_status else False,
+            'strategies_count': len(strategy_names),
+            'strategies': strategy_names,
+            'signals_count': len(signal_keys) if 'signal_keys' in locals() else 0,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error in strategy manager health endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'status': 'error',
+            'message': f"Error checking strategy manager health: {str(e)}",
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/backend/heartbeat')
+def backend_heartbeat():
+    """API endpoint to check if backend services are running and ready"""
+    try:
+        # Check for signs of life in the backend
+        heartbeat_signs = {
+            "strategy_manager": {
+                "running": False,
+                "last_seen": None,
+                "interval": None,
+                "details": {}
+            },
+            "data_clients": {
+                "websocket_client": False,
+                "news_client": False
+            },
+            "traders": {
+                "alpaca_trader": False
+            },
+            "redis_status": {
+                "connection": True,
+                "key_count": 0
+            }
+        }
+        
+        # Check strategy manager
+        running_status = redis_client.get('strategy_manager:running')
+        if running_status and running_status.lower() == 'true':
+            heartbeat_signs["strategy_manager"]["running"] = True
+            
+            # Get polling interval
+            interval = redis_client.get('strategy_manager:interval')
+            if interval:
+                try:
+                    heartbeat_signs["strategy_manager"]["interval"] = int(interval)
+                except:
+                    pass
+            
+            # Check if there's a last update timestamp
+            last_poll = redis_client.get('strategy_manager:last_poll')
+            if last_poll:
+                heartbeat_signs["strategy_manager"]["last_seen"] = last_poll
+                
+                # Calculate time since last poll
+                try:
+                    poll_time = datetime.fromisoformat(last_poll)
+                    now = datetime.now()
+                    time_diff_seconds = (now - poll_time).total_seconds()
+                    
+                    heartbeat_signs["strategy_manager"]["details"]["last_poll_seconds_ago"] = time_diff_seconds
+                    
+                    # Check if the manager appears to be stalled
+                    if heartbeat_signs["strategy_manager"]["interval"]:
+                        expected_interval = heartbeat_signs["strategy_manager"]["interval"]
+                        grace_period = max(expected_interval * 2, 120)  # 2x interval or at least 2 minutes
+                        
+                        if time_diff_seconds > grace_period:
+                            heartbeat_signs["strategy_manager"]["details"]["status"] = "stalled"
+                            heartbeat_signs["strategy_manager"]["details"]["status_message"] = f"Last poll was {time_diff_seconds:.1f}s ago, expected every {expected_interval}s"
+                        else:
+                            heartbeat_signs["strategy_manager"]["details"]["status"] = "active"
+                            heartbeat_signs["strategy_manager"]["details"]["status_message"] = f"Last poll {time_diff_seconds:.1f}s ago, within expected interval of {expected_interval}s"
+                    else:
+                        heartbeat_signs["strategy_manager"]["details"]["status"] = "unknown"
+                        heartbeat_signs["strategy_manager"]["details"]["status_message"] = f"Last poll was {time_diff_seconds:.1f}s ago, interval unknown"
+                        
+                except Exception as e:
+                    heartbeat_signs["strategy_manager"]["details"]["status"] = "error"
+                    heartbeat_signs["strategy_manager"]["details"]["error"] = f"Error parsing poll time: {str(e)}"
+        
+        # Check for active strategies
+        strategy_keys = redis_client.keys("strategy:*:info")
+        heartbeat_signs["strategy_manager"]["details"]["registered_strategies"] = len(strategy_keys)
+        heartbeat_signs["strategy_manager"]["details"]["strategy_names"] = [key.split(':')[1] for key in strategy_keys]
+        
+        # Check for websocket client (look for recent price history)
+        price_keys = redis_client.keys("price:*")
+        if price_keys:
+            heartbeat_signs["data_clients"]["websocket_client"] = True
+        
+        # Check for news client
+        news_keys = redis_client.keys("news:*")
+        if news_keys:
+            heartbeat_signs["data_clients"]["news_client"] = True
+        
+        # Check for Alpaca trader
+        account_data = redis_client.get("account:data")
+        if account_data:
+            heartbeat_signs["traders"]["alpaca_trader"] = True
+        
+        # Get Redis stats
+        all_keys = redis_client.keys("*")
+        heartbeat_signs["redis_status"]["key_count"] = len(all_keys)
+        
+        # Determine overall status
+        strategy_manager_alive = (
+            heartbeat_signs["strategy_manager"]["running"] and 
+            heartbeat_signs["strategy_manager"]["details"].get("status") in ["active", "unknown"]
+        )
+        
+        backend_alive = (
+            strategy_manager_alive or 
+            heartbeat_signs["data_clients"]["websocket_client"] or
+            heartbeat_signs["traders"]["alpaca_trader"]
+        )
+        
+        return jsonify({
+            "status": "alive" if backend_alive else "not_detected",
+            "message": "Backend services detected" if backend_alive else "No backend services detected",
+            "strategy_manager_status": "running" if strategy_manager_alive else "stopped",
+            "heartbeat": heartbeat_signs,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error checking backend heartbeat: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/restart_strategy_manager', methods=['POST'])
+def restart_strategy_manager():
+    """API endpoint to restart the strategy manager with confirmation"""
+    try:
+        # Get the request data for interval setting
+        data = request.json or {}
+        interval = int(data.get('interval', 60))
+        restart_method = "unknown"
+        redis_error = None
+        
+        # Step 1: Try to stop the strategy manager
+        try:
+            # First try direct import if available
+            try:
+                from src.strategies.strategy_manager import strategy_manager
+                strategy_manager.stop_polling()
+                print("Successfully stopped strategy manager via direct import")
+            except ImportError:
+                # If direct import fails, use Redis
+                try:
+                    print("Using Redis to stop strategy manager")
+                    redis_client.publish('strategy_updates', 
+                        json.dumps({
+                            'action': 'stop_polling'
+                        })
+                    )
+                    # Set the running state in Redis
+                    redis_client.set('strategy_manager:running', 'false')
+                except Exception as e:
+                    redis_error = str(e)
+                    print(f"Redis error stopping strategy manager: {e}")
+            
+            # Small delay to ensure stop completes
+            time.sleep(1)
+        except Exception as e:
+            print(f"Error stopping strategy manager: {e}")
+            # Continue anyway since we'll try to start it
+        
+        # Step 2: Start the strategy manager
+        try:
+            try:
+                from src.strategies.strategy_manager import strategy_manager
+                strategy_manager.start_polling(interval=interval)
+                print(f"Successfully started strategy manager via direct import with interval {interval}s")
+                restart_method = "direct"
+            except ImportError:
+                # If direct import fails, use Redis
+                try:
+                    print(f"Using Redis to start strategy manager with interval {interval}s")
+                    redis_client.publish('strategy_updates', 
+                        json.dumps({
+                            'action': 'start_polling',
+                            'interval': interval
+                        })
+                    )
+                    # Set the running state in Redis
+                    redis_client.set('strategy_manager:running', 'true')
+                    redis_client.set('strategy_manager:interval', str(interval))
+                    restart_method = "redis"
+                except Exception as e:
+                    redis_error = str(e)
+                    print(f"Redis error starting strategy manager: {e}")
+                    return jsonify({
+                        'success': False,
+                        'error': f"Redis error: {str(e)}. Check if Redis is properly configured and running.",
+                        'timestamp': datetime.now().isoformat()
+                    }), 500
+        except Exception as e:
+            print(f"Error starting strategy manager: {e}")
+            return jsonify({
+                'success': False,
+                'message': f"Error restarting strategy manager: {str(e)}",
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        # Step 3: Confirm the restart by checking Redis keys
+        time.sleep(2)  # Wait for Redis updates
+        
+        # Check if running status is set
+        running_status = redis_client.get('strategy_manager:running')
+        restart_success = running_status and running_status.lower() == 'true'
+        
+        # Also check for a recent last_poll timestamp if the manager is supposed to be running
+        if restart_success:
+            last_poll = redis_client.get('strategy_manager:last_poll')
+            if last_poll:
+                try:
+                    # Check if the last poll is recent (within the past minute)
+                    poll_time = datetime.fromisoformat(last_poll)
+                    now = datetime.now()
+                    time_diff = (now - poll_time).total_seconds()
+                    
+                    # Time difference validation depends on the polling interval
+                    # For shorter intervals, we expect faster confirmation
+                    # For longer intervals, allow more time
+                    expected_max_diff = min(interval * 1.5, 120)  # Cap at 2 minutes
+                    
+                    if time_diff > expected_max_diff:
+                        # Poll time exists but is too old
+                        restart_confirmation = "uncertain"
+                        confirmation_note = f"Last poll was {time_diff:.1f} seconds ago"
+                    else:
+                        # We have a recent poll, success!
+                        restart_confirmation = "confirmed"
+                        confirmation_note = f"Last poll was {time_diff:.1f} seconds ago"
+                except Exception as e:
+                    print(f"Error parsing last poll time: {e}")
+                    restart_confirmation = "uncertain"
+                    confirmation_note = f"Error parsing last poll time: {e}"
+            else:
+                # No last poll time found yet
+                restart_confirmation = "pending"
+                confirmation_note = "Waiting for first poll"
+        else:
+            restart_confirmation = "failed"
+            confirmation_note = "Strategy manager is not running according to Redis"
+        
+        return jsonify({
+            'success': restart_success,
+            'message': f"Strategy manager restarted with {interval}s polling interval",
+            'restart_method': restart_method,
+            'confirmation_status': restart_confirmation,
+            'confirmation_note': confirmation_note,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error in restart strategy manager endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            "error": str(e), 
+            "trace": traceback.format_exc(),
+            'success': False,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/reset_strategy_manager', methods=['POST'])
+def reset_strategy_manager():
+    """Emergency endpoint to reset the strategy manager state in Redis"""
+    try:
+        # Try to get current state for diagnostics
+        original_state = {}
+        try:
+            original_state = {
+                'running': redis_client.get('strategy_manager:running'),
+                'interval': redis_client.get('strategy_manager:interval'),
+                'last_run': redis_client.get('strategy_manager:last_run')
+            }
+        except Exception as e:
+            print(f"Error getting original state: {e}")
+        
+        # Force reset the strategy manager state in Redis
+        try:
+            redis_client.set('strategy_manager:running', 'false')
+            print("Reset strategy manager state to 'false'")
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': f"Error resetting strategy manager state: {str(e)}",
+                'error_details': str(e),
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
+        # Get any stored strategy keys
+        strategy_keys = []
+        try:
+            strategy_keys = redis_client.keys("strategy:*:info")
+            strategy_names = [key.split(':')[1] for key in strategy_keys]
+            print(f"Found {len(strategy_keys)} strategy keys")
+        except Exception as e:
+            print(f"Error getting strategy keys: {e}")
+            strategy_names = []
+        
+        # Also get signal keys to show what data is available
+        signal_keys = []
+        try:
+            signal_keys = redis_client.keys("signal:*")
+            print(f"Found {len(signal_keys)} signal keys")
+        except Exception as e:
+            print(f"Error getting signal keys: {e}")
+        
+        # Construct a command that could be run to restart the backend service
+        restart_command = "docker restart trader-magic-backend"
+        
+        # Construct a detailed message with clear next steps
+        detailed_message = (
+            "Strategy manager state has been reset in Redis. "
+            "If you're still experiencing issues, you may need to restart the backend service."
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': detailed_message,
+            'restart_command': restart_command,
+            'note': 'Refresh the page after a few seconds to see the updated state',
+            'found_strategies': strategy_names,
+            'signal_count': len(signal_keys),
+            'original_state': original_state,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Error resetting strategy manager: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'message': f"Error resetting strategy manager: {str(e)}",
+            'error_details': traceback.format_exc(),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/refresh_trade/<symbol>')
+def refresh_trade(symbol):
+    """API endpoint to manually refresh a specific trade result"""
+    try:
+        # Fetch the trade result from Redis
+        redis_key = f"trade_result:{symbol}"
+        result_data = redis_client.get(redis_key)
+        
+        if result_data:
+            try:
+                # Parse the JSON
+                result = json.loads(result_data)
+                status = result.get('status', 'unknown')
+                print(f"Refreshed trade result for {symbol}: {status}")
+                
+                # If this is an executed trade, trigger a transaction update
+                if status == 'executed' and transaction_update_clients:
+                    socketio.emit('transaction_complete', {
+                        'symbol': symbol,
+                        'timestamp': datetime.now().isoformat(),
+                        'status': status,
+                        'decision': result.get('decision')
+                    })
+                    print(f"Emitted transaction update for {symbol} during refresh")
+                
+                # Return the trade result
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'result': result,
+                    'timestamp': datetime.now().isoformat()
+                })
+            except json.JSONDecodeError as e:
+                print(f"Error parsing trade result for {symbol}: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': f"JSON decode error: {str(e)}",
+                    'raw_data': result_data
+                })
+        else:
+            print(f"No trade result found for {symbol}")
+            return jsonify({
+                'success': False,
+                'error': f"No trade result found for {symbol}"
+            })
+    except Exception as e:
+        print(f"Error refreshing trade result for {symbol}: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'trace': traceback.format_exc()
+        }), 500
+
+@app.route('/api/force_account_update')
+def force_account_update():
+    """Force an update of account data for all connected clients"""
+    try:
+        # Get the latest account data
+        account_key = "account:data"
+        account_data = redis_client.get_json(account_key)
+        
+        # Emit account update notification to all clients
+        socketio.emit('account_update_needed')
+        
+        return jsonify({
+            'success': True,
+            'timestamp': datetime.now().isoformat(),
+            'message': 'Account update notification sent to all clients'
+        })
+    except Exception as e:
+        print(f"Error forcing account update: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/refresh_all_transactions', methods=['POST'])
+def refresh_all_transactions():
+    """API endpoint to refresh all transactions and account data"""
+    try:
+        # Get trading symbols
+        symbols_key = "available_symbols"
+        symbols_data = redis_client.get(symbols_key)
+        
+        if symbols_data:
+            symbols = json.loads(symbols_data)
+        else:
+            # Use default symbols as fallback
+            symbols = ["BTC/USDT", "ETH/USDT", "LTC/USDT", "XRP/USDT"]
+            
+        print(f"Refreshing transactions for {len(symbols)} symbols...")
+        
+        # Clear account data to force refresh
+        account_key = "account:data"
+        redis_client.delete(account_key)
+        
+        # Process each symbol
+        for symbol in symbols:
+            # Clear existing signals and trade results
+            signal_key = f"signal:{symbol}"
+            result_key = f"trade_result:{symbol}"
+            
+            redis_client.delete(signal_key)
+            redis_client.delete(result_key)
+            
+            # Publish notifications to trigger updates
+            redis_client.publish(f'__keyspace@0__:{signal_key}', 'set')
+            redis_client.publish(f'__keyspace@0__:{result_key}', 'set')
+        
+        # Emit Socket.IO event to force frontend refresh
+        socketio.emit('data_update', {"refresh": "complete"})
+        
+        # Emit account update event
+        socketio.emit('account_update_needed')
+        
+        # Also publish to Redis for any other services
+        redis_client.publish('trade_notifications', json.dumps({
+            "type": "refresh_all",
+            "timestamp": datetime.now().isoformat()
+        }))
+        
+        return jsonify({
+            "success": True,
+            "message": f"Successfully refreshed data for {len(symbols)} symbols",
+            "symbols": symbols
+        })
+    except Exception as e:
+        print(f"Error refreshing all transactions: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 
 if __name__ == '__main__':
     # Start Redis listener in a background thread

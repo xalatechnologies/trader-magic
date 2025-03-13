@@ -7,3 +7,5 @@ loguru==0.7.2
 httpx==0.25.2
 tenacity==8.2.3
 pytz==2025.1
+websocket-client==1.7.0
+openai==1.18.0

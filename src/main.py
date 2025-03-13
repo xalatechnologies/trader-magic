@@ -60,11 +60,42 @@ def setup_services():
     data_retrieval_service.start()
     logger.info("Data retrieval service started")
     
+    # Initialize the strategy manager
+    try:
+        from src.strategies.strategy_manager import strategy_manager
+        logger.info("Strategy manager initialized")
+        
+        # Log available strategies
+        strategies = strategy_manager.get_active_strategies()
+        logger.info(f"Available strategies: {len(strategies)}")
+        for strategy in strategies:
+            logger.info(f"Strategy: {strategy['name']} ({strategy['class']}) - Enabled: {strategy['enabled']}")
+            
+        # Start the strategy manager polling
+        if config.features.auto_start_strategies:
+            strategy_manager.start_polling(interval=config.trading.poll_interval)
+            logger.info(f"Strategy manager polling started with interval: {config.trading.poll_interval}s")
+        else:
+            logger.info("Strategy manager auto-start disabled, will start via API")
+    except ImportError as e:
+        logger.warning(f"Strategy manager not available: {e}")
+    except Exception as e:
+        logger.error(f"Error initializing strategy manager: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
     # Log key components for debugging
     import json
     logger.info("Active trading symbols: %s", config.trading.symbols)
     logger.info("Trade percentage: %s", config.trading.trade_percentage)
     logger.info("Poll interval: %s", config.trading.poll_interval)
+    
+    # Log news strategy configuration
+    logger.info("News strategy enabled: %s", config.features.news_strategy)
+    if config.features.news_strategy:
+        logger.info("News strategy buy threshold: %s", config.features.news_buy_threshold)
+        logger.info("News strategy sell threshold: %s", config.features.news_sell_threshold)
+        logger.info("OpenAI model: %s", config.openai.model)
     
     # Check if signals are already in Redis
     for symbol in config.trading.symbols:
@@ -106,6 +137,15 @@ def main_loop():
     # Initialize execution count for tracking
     execution_count = 0
     
+    # Try to import the strategy manager
+    try:
+        from src.strategies.strategy_manager import strategy_manager
+        has_strategy_manager = True
+        logger.info("Strategy manager available for trading decisions")
+    except ImportError:
+        has_strategy_manager = False
+        logger.warning("Strategy manager not available, using legacy decision process")
+    
     while running:
         try:
             # Log iteration start
@@ -114,23 +154,51 @@ def main_loop():
             
             # Get all signals at once to avoid decision delays
             all_signals = {}
-            for symbol in config.trading.symbols:
-                # Get the latest trade signal (already calculated by data_retrieval service)
-                signal = ai_decision_service.get_latest_signal(symbol)
-                if signal:
-                    all_signals[symbol] = signal
-                    logger.info(f"Retrieved signal for {symbol}: {signal.decision.value}")
-                else:
-                    logger.warning(f"No signal found for {symbol}")
-                    # Check if RSI data is available
-                    rsi_data = data_retrieval_service.get_latest_rsi(symbol)
-                    if rsi_data:
-                        logger.info(f"RSI data available for {symbol}: {rsi_data.value}, generating signal")
-                        # Try to generate a signal
-                        signal = ai_decision_service.get_decision(rsi_data)
-                        if signal:
+            
+            # First check for signals from the strategy manager
+            if has_strategy_manager:
+                for symbol in config.trading.symbols:
+                    # Check if there's a signal from the strategy manager
+                    signal_key = f"signal:{symbol}"
+                    signal_data = redis_client.get_json(signal_key)
+                    
+                    if signal_data:
+                        # Convert the signal data to a TradeSignal object
+                        from src.utils import TradeSignal, TradeDecision
+                        
+                        # Check if the signal is recent (within the last 5 minutes)
+                        signal_time = datetime.fromisoformat(signal_data.get('timestamp', '')) if 'timestamp' in signal_data else None
+                        if signal_time and (datetime.now() - signal_time).total_seconds() < 300:
+                            # Create a trade signal from the data
+                            signal = TradeSignal(
+                                symbol=signal_data.get('symbol'),
+                                decision=TradeDecision(signal_data.get('decision')),
+                                confidence=signal_data.get('confidence', 0.0),
+                                timestamp=signal_time
+                            )
+                            
                             all_signals[symbol] = signal
-                            logger.info(f"Generated new signal for {symbol}: {signal.decision.value}")
+                            logger.info(f"Using strategy manager signal for {symbol}: {signal.decision.value}")
+            
+            # If we don't have signals from the strategy manager, use the legacy approach
+            for symbol in config.trading.symbols:
+                if symbol not in all_signals:
+                    # Get the latest trade signal (already calculated by data_retrieval service)
+                    signal = ai_decision_service.get_latest_signal(symbol)
+                    if signal:
+                        all_signals[symbol] = signal
+                        logger.info(f"Retrieved legacy signal for {symbol}: {signal.decision.value}")
+                    else:
+                        logger.warning(f"No signal found for {symbol}")
+                        # Check if RSI data is available
+                        rsi_data = data_retrieval_service.get_latest_rsi(symbol)
+                        if rsi_data:
+                            logger.info(f"RSI data available for {symbol}: {rsi_data.value}, generating signal")
+                            # Try to generate a signal
+                            signal = ai_decision_service.get_decision(rsi_data)
+                            if signal:
+                                all_signals[symbol] = signal
+                                logger.info(f"Generated new legacy signal for {symbol}: {signal.decision.value}")
             
             # Log how many signals we found
             logger.info(f"Found {len(all_signals)} signals for execution")
@@ -219,6 +287,16 @@ def shutdown():
     
     # Stop the data retrieval service
     data_retrieval_service.stop()
+    
+    # Stop the strategy manager if it's running
+    try:
+        from src.strategies.strategy_manager import strategy_manager
+        strategy_manager.stop_polling()
+        logger.info("Strategy manager stopped")
+    except ImportError:
+        logger.info("Strategy manager not available, skipping shutdown")
+    except Exception as e:
+        logger.error(f"Error stopping strategy manager: {e}")
     
     logger.info("Shutdown complete")
 
